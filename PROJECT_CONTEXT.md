@@ -4,7 +4,7 @@
 
 ## 项目位置
 
-项目根目录即本文件所在目录。原始方案文档位于同级目录下的 `蓝心校园AI管家_完整竞赛项目方案.md`。
+项目根目录即本文件所在目录。原始方案文档：[COMPETITION_PROPOSAL.md](COMPETITION_PROPOSAL.md)。
 
 ## 当前项目形态
 
