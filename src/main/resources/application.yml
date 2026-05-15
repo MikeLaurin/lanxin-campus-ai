@@ -1,0 +1,30 @@
+server:
+  port: 8080
+  address: 0.0.0.0
+
+spring:
+  application:
+    name: lanxin-campus-ai
+  datasource:
+    url: jdbc:mysql://localhost:3306/lanxin_campus?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:vivo2026!}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 25MB
+      file-size-threshold: 1KB
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    open-in-view: true
+
+app:
+  demo-user: vivo-campus-demo
+
+lanxin:
+  api-key: ${LANXIN_API_KEY:}
+  api-url: ${LANXIN_API_URL:https://api-ai.vivo.com.cn/v1}
+  model: ${LANXIN_MODEL:Doubao-Seed-2.0-mini}

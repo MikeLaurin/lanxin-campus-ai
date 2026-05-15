@@ -1,0 +1,19 @@
+# Maven
+target/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env (不要提交 API Key)
+.env
+*.env
+env.sh
+
+# Logs
+*.log

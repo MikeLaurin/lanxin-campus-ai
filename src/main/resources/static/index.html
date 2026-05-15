@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>蓝心校园 AI 管家</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <!-- Auth overlay -->
+  <div class="auth-overlay" id="authOverlay">
+    <div class="auth-card">
+      <div class="auth-header">
+        <h1>蓝心校园 AI 管家</h1>
+        <p>你的校园学习搭子，更懂你的 AI 管家</p>
+      </div>
+      <div class="auth-tabs">
+        <button class="auth-tab active" data-tab="login">登录</button>
+        <button class="auth-tab" data-tab="register">注册</button>
+      </div>
+      <form id="loginForm" class="auth-form" autocomplete="off">
+        <input type="text" id="loginUsername" placeholder="用户名" required>
+        <input type="password" id="loginPassword" placeholder="密码" required>
+        <button type="submit" class="auth-submit">登录</button>
+        <p class="auth-hint">演示账号：demo / demo123</p>
+      </form>
+      <form id="registerForm" class="auth-form" style="display:none" autocomplete="off">
+        <input type="text" id="regUsername" placeholder="用户名 *" required>
+        <input type="password" id="regPassword" placeholder="密码 *" required>
+        <input type="text" id="regName" placeholder="昵称">
+        <input type="text" id="regSchool" placeholder="学校">
+        <input type="text" id="regMajor" placeholder="专业">
+        <input type="text" id="regGrade" placeholder="年级">
+        <button type="submit" class="auth-submit">注册</button>
+      </form>
+      <p class="auth-error" id="authError"></p>
+    </div>
+  </div>
+
+  <!-- Main app -->
+  <main class="phone-shell" id="appShell" style="display:none">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">vivo 快应用 MVP</p>
+        <h1>蓝心校园 AI 管家</h1>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span id="userBadge" style="font-size:13px;color:var(--muted);"></span>
+        <button class="text-button" id="logoutBtn" style="color:var(--muted);">退出</button>
+        <button class="icon-button" id="offlineToggle" aria-label="切换离线模式" title="切换离线模式">
+          <span class="signal-icon"></span>
+        </button>
+      </div>
+    </header>
+
+    <section class="content">
+      <div class="tab-panel active" data-panel="home">
+        <div class="hero-band">
+          <p>你的校园学习搭子，更懂你的 AI 管家</p>
+          <div class="stats-grid" id="statsGrid"></div>
+        </div>
+        <div class="quick-actions">
+          <button class="primary-action" data-nav="capture">
+            <span class="camera-icon"></span>
+            拍照笔记
+          </button>
+          <button class="secondary-action" data-nav="tasks">
+            <span class="clock-icon"></span>
+            DDL 管理
+          </button>
+        </div>
+        <section class="section-block">
+          <div class="section-head">
+            <h2>今日待办</h2>
+            <button class="text-button" id="refreshToday">刷新</button>
+          </div>
+          <div class="item-list" id="todayList"></div>
+        </section>
+        <section class="section-block">
+          <div class="section-head">
+            <h2>最近笔记</h2>
+            <button class="text-button" data-nav="notes">查看全部</button>
+          </div>
+          <div class="item-list" id="recentNotes"></div>
+        </section>
+      </div>
+
+      <div class="tab-panel" data-panel="capture">
+        <section class="section-block">
+          <div class="section-head">
+            <h2>课堂多模态智能笔记</h2>
+            <span class="status-pill" id="modeBadge">云端增强</span>
+          </div>
+          <div class="upload-area" id="uploadArea">
+            <div class="upload-placeholder" id="uploadPlaceholder">
+              <span class="camera-icon" style="font-size:36px;"></span>
+              <p>点击选择或拖拽课堂照片</p>
+              <p class="eyebrow">支持板书、PPT、课本页面</p>
+            </div>
+            <img id="imagePreview" class="image-preview" alt="预览" style="display:none;">
+            <input type="file" id="imageFile" accept="image/*" style="display:none;">
+          </div>
+          <div class="button-row">
+            <button class="primary-action" id="processImage">
+              <span class="spark-icon"></span>
+              AI 识别照片
+            </button>
+            <button class="secondary-action" id="cancelImage">重新选择</button>
+          </div>
+          <textarea id="noteInput" rows="6" placeholder="粘贴或输入拍到的板书/PPT内容，例如：数据结构 二叉树遍历 时间复杂度 O(n) 递归出口。"></textarea>
+          <div class="button-row">
+            <button class="primary-action" id="processNote">
+              <span class="spark-icon"></span>
+              AI 结构化
+            </button>
+            <button class="secondary-action" id="loadSample">示例内容</button>
+          </div>
+        </section>
+        <section class="section-block result-block" id="noteResult"></section>
+      </div>
+
+      <div class="tab-panel" data-panel="notes">
+        <section class="section-block">
+          <div class="section-head">
+            <h2>笔记归档</h2>
+            <input class="search-input" id="noteSearch" placeholder="搜索课程/标签">
+          </div>
+          <div class="item-list" id="noteList"></div>
+        </section>
+      </div>
+
+      <div class="tab-panel" data-panel="tasks">
+        <section class="section-block">
+          <div class="section-head">
+            <h2>朋友管家式时间管理</h2>
+            <span class="status-pill">优先级排序</span>
+          </div>
+          <textarea id="ddlInput" rows="4" placeholder="输入作业要求，例如：下周前提交高数第3章习题，截止很急。"></textarea>
+          <div class="button-row">
+            <button class="primary-action" id="parseDdl">
+              <span class="spark-icon"></span>
+              解析 DDL
+            </button>
+            <button class="secondary-action" id="addDdlSample">示例要求</button>
+          </div>
+        </section>
+        <section class="section-block">
+          <div class="section-head">
+            <h2>DDL 列表</h2>
+            <button class="text-button" id="sortPriority">按优先级</button>
+          </div>
+          <div class="item-list" id="taskList"></div>
+        </section>
+      </div>
+
+      <div class="tab-panel" data-panel="ai">
+        <section class="section-block">
+          <div class="section-head">
+            <h2>知识库文档</h2>
+            <span class="status-pill" id="ragStatus">未启用</span>
+          </div>
+          <div class="upload-area" id="docUploadArea" style="min-height:80px;">
+            <div class="upload-placeholder" id="docUploadPlaceholder">
+              <p>上传 PDF / TXT 参考资料</p>
+              <p class="eyebrow">AI 将基于文档内容回答问题</p>
+            </div>
+            <input type="file" id="docFileInput" accept=".pdf,.txt,.md" style="display:none;">
+          </div>
+          <p id="docUploadStatus" style="font-size:13px;color:var(--muted);margin-top:6px;"></p>
+        </section>
+        <section class="section-block">
+          <div class="section-head">
+            <h2>已上传文档</h2>
+            <button class="text-button" id="refreshDocs">刷新</button>
+          </div>
+          <div class="item-list" id="docList"></div>
+        </section>
+        <section class="section-block">
+          <div class="section-head">
+            <h2>小蓝 AI 互动</h2>
+            <span class="status-pill">学习搭子</span>
+          </div>
+          <div class="chat-box" id="chatBox"></div>
+          <div class="chat-input">
+            <input id="chatInput" placeholder="问问小蓝：今晚怎么复习？">
+            <button class="icon-button filled" id="sendChat" aria-label="发送" title="发送">
+              <span class="send-icon"></span>
+            </button>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;margin-top:10px;">
+            <input type="checkbox" id="ragToggle" checked style="accent-color:var(--blue);width:16px;height:16px;">
+            <label for="ragToggle" style="font-size:13px;color:var(--muted);">基于知识库回答</label>
+          </div>
+        </section>
+        <section class="section-block">
+          <div class="section-head">
+            <h2>逃课补课包</h2>
+            <button class="text-button" id="makeupBtn">生成</button>
+          </div>
+          <div id="makeupBox" class="compact-text"></div>
+        </section>
+      </div>
+
+      <div class="tab-panel" data-panel="report">
+        <section class="section-block">
+          <div class="section-head">
+            <h2>学习周报</h2>
+            <button class="text-button" id="refreshReport">生成</button>
+          </div>
+          <div id="reportBox"></div>
+        </section>
+      </div>
+    </section>
+
+    <nav class="bottom-nav" aria-label="主导航">
+      <button class="active" data-nav="home"><span class="home-icon"></span><small>首页</small></button>
+      <button data-nav="capture"><span class="camera-icon"></span><small>拍照</small></button>
+      <button data-nav="notes"><span class="note-icon"></span><small>笔记</small></button>
+      <button data-nav="tasks"><span class="clock-icon"></span><small>DDL</small></button>
+      <button data-nav="ai"><span class="chat-icon"></span><small>小蓝</small></button>
+      <button data-nav="report"><span class="chart-icon"></span><small>周报</small></button>
+    </nav>
+  </main>
+  <script src="/app.js?v=3"></script>
+</body>
+</html>
