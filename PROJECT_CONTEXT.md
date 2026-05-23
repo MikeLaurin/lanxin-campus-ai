@@ -15,7 +15,7 @@
 - 后端：Spring Boot 3.4.1
 - 前端：原生 HTML + CSS + JavaScript
 - 页面托管：Spring Boot `src/main/resources/static`
-- 数据存储：MySQL 8.4（数据库 `lanxin_campus`），Spring Data JPA
+- 数据存储：H2 文件数据库（`./data/campus-ai.mv.db`），Spring Data JPA
 - 用户认证：BCrypt 密码加密 + Token 令牌，每个用户数据隔离
 - AI 接入：vivo AIGC 官方 OpenAI 兼容接口
 
@@ -35,17 +35,8 @@ Spring Boot 已配置 `server.address: 0.0.0.0`，监听所有网络接口，局
 
 - JDK 17+
 - Maven 3.6+
-- MySQL 8.4
 
-### MySQL 准备
-
-安装 MySQL 8.4 后，创建数据库：
-
-```sql
-CREATE DATABASE lanxin_campus CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-```
-
-应用首次启动时通过 `ddl-auto: update` 自动建表，无需手动导入。
+> 无需安装 MySQL。项目使用 H2 文件数据库，数据文件存储在 `./data/` 目录下，首次启动自动创建。
 
 ### 配置 API Key
 
@@ -65,14 +56,15 @@ $env:LANXIN_MODEL="Doubao-Seed-2.0-mini"
 
 未配置 Key 时 AI 功能自动降级到本地 mock。
 
-### 自定义数据库用户
+### H2 数据库控制台
 
-```bash
-export MYSQL_USER="你的数据库用户"
-export MYSQL_PASSWORD="你的数据库密码"
+开发时可访问 H2 内置控制台查看数据：
+
+```
+http://localhost:8080/h2-console
 ```
 
-默认值：`root` / `vivo2026!`
+JDBC URL: `jdbc:h2:file:./data/campus-ai`，用户名 `sa`，密码留空。
 
 ## 已实现功能
 
@@ -95,6 +87,9 @@ export MYSQL_PASSWORD="你的数据库密码"
 - 逃课补课包
 - 学习周报
 - **RAG 知识库增强对话**：PDF/TXT 上传 → 分块(1000字+200重叠) → embedding 向量化 → 余弦相似度检索 → 注入 prompt，失败自动降级普通对话
+- **笔记自动入 RAG**：创建/更新笔记时自动索引到 RAG 知识库，AI 对话和补课包会引用用户笔记内容；embedding 不可用时自动降级为关键词匹配检索
+- **流式补课包**：POST /api/v1/ai/makeup/stream 纯文本流式输出，逐字渲染，段落格式完整保留
+- **模型思考模式已禁用**：API 请求中设置 `"thinking": {"type": "disabled"}`，避免推理过程混入输出
 - 统计看板
 - 蓝心模型配置状态诊断
 - 所有数据按用户隔离
@@ -170,19 +165,19 @@ src/main/java/com/vivo/lanxin/campus/service/AuthService.java
 AI 业务封装：
 
 ```
-src/main/java/com/vivo/lanxin/campus/service/AiMockService.java
+src/main/java/com/vivo/lanxin/campus/service/AiMockService.java    (笔记处理、AI对话、补课包、流式补课包)
 ```
 
 RAG 服务：
 
 ```
-src/main/java/com/vivo/lanxin/campus/service/RagService.java   (文本提取/分块/embedding/检索)
+src/main/java/com/vivo/lanxin/campus/service/RagService.java       (文本提取/分块/embedding/检索/笔记索引)
 ```
 
 vivo AIGC API 客户端：
 
 ```
-src/main/java/com/vivo/lanxin/campus/service/LanxinApiClient.java  (含 /v1/embeddings)
+src/main/java/com/vivo/lanxin/campus/service/LanxinApiClient.java  (chat、chatWithImage、streamChat、embedding)
 ```
 
 前端：
@@ -196,7 +191,7 @@ src/main/resources/static/app.js
 配置：
 
 ```
-src/main/resources/application.yml          (主配置，MySQL)
+src/main/resources/application.yml          (主配置，H2 文件数据库)
 src/test/resources/application.yml          (测试配置，H2 内存数据库)
 ```
 
@@ -271,7 +266,7 @@ GET /api/v1/ai/provider/status
 
 ## 常用命令
 
-运行测试（H2 内存数据库，无需 MySQL）：
+运行测试（H2 内存数据库）：
 
 ```bash
 mvn test
@@ -312,7 +307,7 @@ Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
 
 - `mvn test` 5 个测试全部通过（H2 内存数据库）
 - `mvn package` 打包成功
-- MySQL 数据持久化 + JPA 正常工作
+- H2 文件数据库 + JPA 正常工作
 - BCrypt 密码加密 + Token 认证正常
 - 用户数据隔离（每个用户只看自己的笔记/DDL）
 - 官方文档已读取并按文档实现 `requestId`
@@ -320,33 +315,24 @@ Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
 - AI 对话已移除话题限制和字数限制
 - 图片上传全链路验证通过
 - RAG 知识库增强对话：文档上传、分块、embedding 向量化、检索增强、降级兜底全链路已实现
+- 笔记自动索引 RAG：创建/更新时自动标记文档 ID，AI 对话中可检索到笔记内容
+- 流式补课包全链路验证通过：纯文本流式输出，段落换行完整保留
 
 注意：如果新窗口或新终端重启服务后 `configured=false`，通常是 `LANXIN_API_KEY` 没有传到 Java 进程，不是代码问题。
 
 ## 后续待做
 
-优先级较高：
-
-1. ~~图片上传~~（已完成）
-
-2. ~~持久化 + 用户认证~~（已完成）
-   - ~~数据从内存改为 MySQL 数据库。~~
-   - ~~每个用户按账号密码登录，进入自己的账号。~~
-   - ~~演示账号 demo / demo123。~~
-
-3. ~~RAG~~（已完成）
-   - ~~新增资料上传。~~
-   - ~~文档切片。~~
-   - ~~embedding 入库。~~
-   - ~~检索相关笔记/PDF/DDL 后再调用蓝心模型。~~
-
-4. 正式快应用迁移
+1. 正式快应用迁移
    - 当前前端是浏览器演示页。
    - 后续可迁移到 vivo 快应用 `.ux` 组件和 `manifest.json`。
 
-5. 更细的模型错误反馈
+2. 更细的模型错误反馈
    - 目前 `LanxinApiClient` 失败时静默降级。
    - 后续可以记录错误码，但不要在前端暴露 Key。
+
+3. embedding 端点不可用时的持久化降级
+   - vivo AIGC `/v1/embeddings` 返回 404，当前用关键词匹配兜底。
+   - 后续如有可用的 embedding 模型，可恢复向量检索精度。
 
 ## 给新窗口的建议开场
 

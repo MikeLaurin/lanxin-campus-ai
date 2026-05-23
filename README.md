@@ -1,6 +1,6 @@
 # 蓝心校园 AI 管家 MVP
 
-根据[竞赛方案](COMPETITION_PROPOSAL.md)实现的可运行演示项目。Spring Boot 3.4.1 + MySQL 8.4 + 原生前端，每个用户独立账号，数据持久化存储。
+根据[竞赛方案](COMPETITION_PROPOSAL.md)实现的可运行演示项目。Spring Boot 3.4.1 + H2 文件数据库 + 原生前端，每个用户独立账号，数据持久化存储。
 
 ## 前置条件
 
@@ -8,23 +8,12 @@
 
 - **JDK 17+**（项目编译目标为 Java 17）
 - **Maven 3.6+**（或使用项目自带的 `mvnw`）
-- **MySQL 8.4**（数据库名 `lanxin_campus`，字符集 utf8mb4）
 
-> 仅跑测试不需要 MySQL，测试使用 H2 内存数据库。
+> 无需安装 MySQL。项目使用 H2 文件数据库，数据文件存储在 `./data/` 目录下，首次启动自动创建。
 
 ## 快速开始
 
-### 1. 安装并启动 MySQL
-
-确保 MySQL 8.4 已安装并运行。然后创建数据库：
-
-```sql
-CREATE DATABASE lanxin_campus CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-```
-
-应用首次启动时会通过 JPA `ddl-auto: update` 自动建表，无需手动导入 SQL。
-
-### 2. 配置环境变量
+### 1. 配置环境变量
 
 vivo AIGC API Key 通过环境变量注入，不写入代码或配置文件：
 
@@ -42,7 +31,7 @@ $env:LANXIN_MODEL="Doubao-Seed-2.0-mini"
 
 如未配置 API Key，AI 功能会自动降级到本地 mock，不影响其他功能。
 
-### 3. 启动应用
+### 2. 启动应用
 
 ```bash
 # 开发模式（推荐）
@@ -53,7 +42,7 @@ mvn clean package -DskipTests
 java -jar target/campus-ai-1.0.0.jar
 ```
 
-### 4. 打开浏览器
+### 3. 打开浏览器
 
 ```
 http://localhost:8080
@@ -61,27 +50,21 @@ http://localhost:8080
 
 演示账号：`demo` / `demo123`
 
-### 5. 自定义数据库连接
+### H2 数据库控制台
 
-默认连接 `localhost:3306`，用户 `root`，密码通过环境变量 `MYSQL_PASSWORD` 配置，默认为 `vivo2026!`。
-
-如需自定义：
-
-```bash
-export MYSQL_USER="你的用户名"
-export MYSQL_PASSWORD="你的密码"
-```
-
-或直接修改 `src/main/resources/application.yml` 中的连接字符串。
+开发时可访问 `http://localhost:8080/h2-console` 查看数据：
+- JDBC URL: `jdbc:h2:file:./data/campus-ai`
+- 用户名: `sa`，密码留空
 
 ## 技术栈
 
 - 后端：Spring Boot 3.4.1 + Spring Data JPA
-- 数据库：MySQL 8.4
+- 数据库：H2 文件数据库（数据文件 `./data/campus-ai.mv.db`）
 - 前端：HTML + CSS + JavaScript（托管在 `src/main/resources/static/`）
 - 认证：BCrypt 密码加密 + Token 令牌（服务端 ConcurrentHashMap）
 - AI：vivo AIGC OpenAI 兼容接口（失败自动降级 mock）
-- RAG：PDF/TXT 文档上传 → 分块 → embedding 向量化 → 检索增强对话
+- RAG：PDF/TXT 上传 → 分块(1000字+200重叠) → embedding 向量化 → 余弦相似度检索 → 增强对话
+- 流式输出：纯文本 StreamingResponseBody，逐字渲染，段落格式完整保留
 
 ## 项目结构
 
@@ -111,11 +94,13 @@ lanxin-campus-ai/
 - 用户注册/登录（BCrypt 加密，Token 鉴权，数据隔离）
 - 课堂多模态智能笔记：真实图片上传（点击/拖拽），AI 识别板书/PPT，结构化整理
 - DDL 智能管理：从文本解析课程、截止日期、优先级
-- AI 学习搭子：自由对话，不限话题
+- AI 学习搭子：自由对话，不限话题，自动引用用户笔记知识库
 - RAG 知识库增强对话：上传 PDF/TXT 参考资料后，AI 基于文档内容回答，显示参考来源
-- 逃课补课包：知识点、题型、自测
+- 笔记自动入 RAG：创建/更新笔记时自动索引，AI 对话和补课包均可检索到
+- 逃课补课包：流式输出（纯文本流，逐字渲染，Markdown 段落完整保留），结合 RAG 个性化生成
 - 学习周报：笔记、DDL 完成情况、鼓励式反馈
 - 首页仪表盘：统计看板、今日待办、最近笔记
+- 模型思考模式已禁用：避免 Doubao-Seed-2.0-mini 的推理过程混入输出文本
 
 ## 主要接口
 
@@ -149,8 +134,9 @@ lanxin-campus-ai/
 - `POST /api/v1/rag/chat` — RAG 增强对话
 
 ### AI & 统计
-- `POST /api/v1/ai/chat` — AI 对话
-- `POST /api/v1/ai/makeup/generate` — 补课包
+- `POST /api/v1/ai/chat` — AI 对话（自动结合 RAG 笔记知识库）
+- `POST /api/v1/ai/makeup/generate` — 补课包（一次性返回）
+- `POST /api/v1/ai/makeup/stream` — 补课包（流式输出，纯文本逐字渲染）
 - `GET /api/v1/reports/weekly` — 学习周报
 - `GET /api/v1/stats/dashboard` — 统计看板
 - `GET /api/v1/ai/provider/status` — 模型配置状态
@@ -163,7 +149,7 @@ lanxin-campus-ai/
 mvn test
 ```
 
-测试使用 H2 内存数据库，无需 MySQL。
+测试使用 H2 内存数据库。
 
 ## 开发注意事项
 
