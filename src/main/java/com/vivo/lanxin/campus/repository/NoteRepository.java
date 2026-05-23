@@ -19,4 +19,11 @@ public interface NoteRepository extends JpaRepository<Note, Long> {
            "(LOWER(n.title) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +
            "LOWER(n.course) LIKE LOWER(CONCAT('%', :keyword, '%')))")
     List<Note> searchByUser(@Param("userId") long userId, @Param("keyword") String keyword);
+
+    @Query("SELECT n FROM Note n WHERE n.userId = :userId AND " +
+           "(LOWER(n.title) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +
+           "LOWER(n.course) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +
+           "LOWER(n.rawText) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +
+           "LOWER(n.summary) LIKE LOWER(CONCAT('%', :keyword, '%')))")
+    List<Note> fullTextSearch(@Param("userId") long userId, @Param("keyword") String keyword);
 }

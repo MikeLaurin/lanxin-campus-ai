@@ -214,7 +214,12 @@ async function parseDdl() {
 function appendMessage(role, content) {
   const node = document.createElement("div");
   node.className = `message ${role}`;
-  node.textContent = content;
+  const escaped = content
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\n/g, "<br>");
+  node.innerHTML = escaped;
   $("#chatBox").appendChild(node);
   $("#chatBox").scrollTop = $("#chatBox").scrollHeight;
 }
@@ -328,16 +333,35 @@ async function uploadDocument(file) {
 }
 
 async function loadMakeup() {
-  const data = await api("/api/v1/ai/makeup/generate", {
-    method: "POST",
-    body: JSON.stringify({ course: "数据结构" })
-  });
-  $("#makeupBox").innerHTML = `
-    <strong>${data.course}</strong><br>
-    ${data.summary}<br>
-    ${data.knowledgePoints.map((item) => `· ${item}`).join("<br>")}<br>
-    ${data.quiz.map((item) => `自测：${item}`).join("<br>")}
-  `;
+  const box = $("#makeupBox");
+  box.innerHTML = "<strong>数据结构</strong><br><br><span id='makeupStream'></span>";
+
+  try {
+    const response = await fetch("/api/v1/ai/makeup/stream", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(state.token ? { "Authorization": "Bearer " + state.token } : {})
+      },
+      body: JSON.stringify({ course: "数据结构" })
+    });
+
+    if (response.status === 401) { showAuth(); return; }
+    if (!response.ok) throw new Error("Stream failed: " + response.status);
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      fullText += decoder.decode(value, { stream: true });
+      $("#makeupStream").innerHTML = fullText.replace(/\n/g, "<br>");
+    }
+  } catch (err) {
+    box.innerHTML = "<strong>补课包生成失败</strong><br>" + err.message;
+  }
 }
 
 async function loadReport() {

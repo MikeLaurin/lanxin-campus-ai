@@ -1,32 +1,44 @@
 package com.vivo.lanxin.campus.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.function.Consumer;
 
 @Service
 public class LanxinApiClient {
     private final RestClient restClient;
+    private final HttpClient httpClient = HttpClient.newHttpClient();
+    private final ObjectMapper objectMapper;
     private final String apiKey;
     private final String apiUrl;
     private final String model;
 
     public LanxinApiClient(
             RestClient.Builder builder,
+            ObjectMapper objectMapper,
             @Value("${lanxin.api-key:}") String apiKey,
             @Value("${lanxin.api-url:}") String apiUrl,
             @Value("${lanxin.model:}") String model
     ) {
         this.restClient = builder.build();
+        this.objectMapper = objectMapper;
         this.apiKey = apiKey == null ? "" : apiKey.trim();
         this.apiUrl = apiUrl == null ? "" : apiUrl.trim();
         this.model = model == null ? "" : model.trim();
@@ -56,6 +68,7 @@ public class LanxinApiClient {
                 "model", model,
                 "stream", false,
                 "temperature", 0.3,
+                "thinking", Map.of("type", "disabled"),
                 "messages", List.of(
                         Map.of("role", "system", "content", systemPrompt),
                         Map.of("role", "user", "content", userPrompt)
@@ -89,6 +102,95 @@ public class LanxinApiClient {
         );
 
         return callApi(request);
+    }
+
+    public void streamChat(String systemPrompt, String userPrompt, Consumer<String> onToken) {
+        if (!configured()) {
+            mockStream(onToken);
+            return;
+        }
+
+        Map<String, Object> request = Map.of(
+                "model", model,
+                "stream", true,
+                "temperature", 0.3,
+                "thinking", Map.of("type", "disabled"),
+                "messages", List.of(
+                        Map.of("role", "system", "content", systemPrompt),
+                        Map.of("role", "user", "content", userPrompt)
+                )
+        );
+
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(request);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to serialize request", e);
+        }
+
+        HttpRequest httpRequest = HttpRequest.newBuilder()
+                .uri(URI.create(chatCompletionsUrl()))
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
+                .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                .timeout(java.time.Duration.ofSeconds(60))
+                .POST(HttpRequest.BodyPublishers.ofString(json))
+                .build();
+
+        CountDownLatch latch = new CountDownLatch(1);
+        httpClient.sendAsync(httpRequest, HttpResponse.BodyHandlers.ofLines())
+                .thenAccept(response -> {
+                    try {
+                        response.body().forEach(line -> {
+                            if (line.startsWith("data:") && !"data: [DONE]".equals(line)) {
+                                String data = line.substring(5).trim();
+                                try {
+                                    JsonNode node = objectMapper.readTree(data);
+                                    JsonNode delta = node.at("/choices/0/delta");
+                                    JsonNode content = delta.get("content");
+                                    JsonNode reasoning = delta.get("reasoning_content");
+                                    String text = null;
+                                    if (content != null && content.isTextual() && !content.asText().isEmpty()) {
+                                        text = content.asText();
+                                    } else if (reasoning != null && reasoning.isTextual() && !reasoning.asText().isEmpty()) {
+                                        text = reasoning.asText();
+                                    }
+                                    if (text != null) {
+                                        onToken.accept(text);
+                                    }
+                                } catch (Exception ignored) {
+                                    // skip unparseable SSE lines
+                                }
+                            }
+                        });
+                    } finally {
+                        latch.countDown();
+                    }
+                })
+                .exceptionally(e -> {
+                    System.err.println("[LanxinApiClient] Stream error: " + e.getMessage());
+                    latch.countDown();
+                    return null;
+                });
+
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void mockStream(Consumer<String> onToken) {
+        String mock = "\n\n## 补课建议\n\n建议优先补齐核心定义和课堂例题。\n\n### 知识点要点\n- 核心概念\n- 典型题型\n- 易错点\n\n### 自测方向\n1. 用自己的话解释核心定义\n2. 完成一道基础题\n3. 指出一个可能考点";
+        String[] chunks = mock.split("(?<=\\n)");
+        for (String chunk : chunks) {
+            onToken.accept(chunk);
+            try {
+                Thread.sleep(60);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
     }
 
     private Optional<String> callApi(Map<String, Object> request) {

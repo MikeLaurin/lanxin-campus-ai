@@ -57,6 +57,8 @@ public class Note {
 
     private boolean offlineCreated;
 
+    private Long ragDocumentId;
+
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -108,6 +110,9 @@ public class Note {
 
     public boolean isOfflineCreated() { return offlineCreated; }
     public void setOfflineCreated(boolean offlineCreated) { this.offlineCreated = offlineCreated; }
+
+    public Long getRagDocumentId() { return ragDocumentId; }
+    public void setRagDocumentId(Long ragDocumentId) { this.ragDocumentId = ragDocumentId; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }

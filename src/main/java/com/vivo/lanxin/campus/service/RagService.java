@@ -4,8 +4,10 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vivo.lanxin.campus.model.Document;
 import com.vivo.lanxin.campus.model.DocumentChunk;
+import com.vivo.lanxin.campus.model.Note;
 import com.vivo.lanxin.campus.repository.DocumentChunkRepository;
 import com.vivo.lanxin.campus.repository.DocumentRepository;
+import com.vivo.lanxin.campus.repository.NoteRepository;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.stereotype.Service;
@@ -29,15 +31,18 @@ public class RagService {
 
     private final DocumentRepository documentRepo;
     private final DocumentChunkRepository chunkRepo;
+    private final NoteRepository noteRepo;
     private final LanxinApiClient lanxin;
     private final ObjectMapper objectMapper;
 
     public RagService(DocumentRepository documentRepo,
                       DocumentChunkRepository chunkRepo,
+                      NoteRepository noteRepo,
                       LanxinApiClient lanxin,
                       ObjectMapper objectMapper) {
         this.documentRepo = documentRepo;
         this.chunkRepo = chunkRepo;
+        this.noteRepo = noteRepo;
         this.lanxin = lanxin;
         this.objectMapper = objectMapper;
     }
@@ -149,10 +154,7 @@ public class RagService {
     // ── Embedding ───────────────────────────────────────────
 
     private Optional<String> generateEmbedding(String text) {
-        // TEMP: skip embedding call to isolate OOM issue
-        System.out.println("[RagService] embedding skipped for: " + text.substring(0, Math.min(50, text.length())) + "...");
-        return Optional.empty();
-        // return lanxin.embedding(text).map(this::serializeEmbedding);
+        return lanxin.embedding(text).map(this::serializeEmbedding);
     }
 
     private String serializeEmbedding(float[] embedding) {
@@ -316,6 +318,97 @@ public class RagService {
                 documentRepo.delete(doc);
             }
         });
+    }
+
+    public List<RetrievedChunk> retrieveByKeyword(long userId, String query) {
+        List<Note> allNotes = noteRepo.findByUserIdOrderByUpdatedAtDesc(userId);
+        if (allNotes.isEmpty()) return List.of();
+
+        String[] keywords = query.toLowerCase().split("[\\s，。！？,.!?]+");
+        List<Note> matched = allNotes.stream()
+                .filter(n -> matchesAnyKeyword(n, keywords))
+                .limit(TOP_K)
+                .toList();
+
+        return matched.stream().map(note -> {
+            String content = note.getSummary() != null && !note.getSummary().isBlank()
+                    ? note.getSummary()
+                    : (note.getRawText() != null ? note.getRawText().substring(0, Math.min(300, note.getRawText().length())) : "");
+            return new RetrievedChunk(content, note.getTitle(), 0.0, 0);
+        }).toList();
+    }
+
+    private boolean matchesAnyKeyword(Note note, String[] keywords) {
+        String haystack = (note.getTitle() + " " + note.getCourse() + " "
+                + note.getSummary() + " " + note.getRawText()).toLowerCase();
+        for (String kw : keywords) {
+            if (kw.length() >= 2 && haystack.contains(kw)) return true;
+        }
+        return false;
+    }
+
+    public void deleteNoteDocument(long documentId) {
+        chunkRepo.deleteByDocumentId(documentId);
+        documentRepo.deleteById(documentId);
+    }
+
+    public long indexNote(com.vivo.lanxin.campus.model.Note note) {
+        String content = buildNoteContent(note);
+        Document doc = new Document();
+        doc.setUserId(note.getUserId());
+        doc.setTitle(note.getTitle());
+        doc.setOriginalFilename("note_" + note.getId());
+        doc.setFileType("NOTE");
+        doc.setStatus("PROCESSING");
+        doc.setFullText(content);
+        doc.setFileSize(content.length());
+        documentRepo.save(doc);
+
+        List<String> chunks = chunkText(content);
+        List<DocumentChunk> chunkEntities = new ArrayList<>();
+        for (int i = 0; i < chunks.size(); i++) {
+            String chunkText = chunks.get(i);
+            DocumentChunk chunk = new DocumentChunk();
+            chunk.setUserId(note.getUserId());
+            chunk.setDocumentId(doc.getId());
+            chunk.setChunkIndex(i);
+            chunk.setContent(chunkText);
+            chunk.setCharCount(chunkText.length());
+            generateEmbedding(chunkText).ifPresent(chunk::setEmbedding);
+            chunkEntities.add(chunk);
+        }
+        chunkRepo.saveAll(chunkEntities);
+
+        doc.setChunkCount(chunks.size());
+        doc.setStatus("READY");
+        documentRepo.save(doc);
+        return doc.getId();
+    }
+
+    public void reindexNote(com.vivo.lanxin.campus.model.Note note) {
+        if (note.getRagDocumentId() != null) {
+            deleteNoteDocument(note.getRagDocumentId());
+        }
+        long docId = indexNote(note);
+        note.setRagDocumentId(docId);
+    }
+
+    private String buildNoteContent(com.vivo.lanxin.campus.model.Note note) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("标题：").append(note.getTitle()).append("\n");
+        if (note.getCourse() != null && !note.getCourse().isBlank()) {
+            sb.append("课程：").append(note.getCourse()).append("\n");
+        }
+        if (note.getSummary() != null && !note.getSummary().isBlank()) {
+            sb.append("摘要：").append(note.getSummary()).append("\n");
+        }
+        if (note.getKeyPoints() != null && !note.getKeyPoints().isEmpty()) {
+            sb.append("要点：").append(String.join("；", note.getKeyPoints())).append("\n");
+        }
+        if (note.getRawText() != null && !note.getRawText().isBlank()) {
+            sb.append("原始内容：").append(note.getRawText());
+        }
+        return sb.toString();
     }
 
     // ── Inner Classes ───────────────────────────────────────

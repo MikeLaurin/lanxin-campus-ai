@@ -23,6 +23,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
+import org.springframework.http.MediaType;
 
 import java.time.LocalDate;
 import java.util.Comparator;
@@ -102,6 +104,8 @@ public class AppController {
                            @Valid @RequestBody NoteRequest request) {
         Note note = buildNote(request);
         note.setUserId(auth.getUserId(authHeader));
+        note = noteRepo.save(note);
+        note.setRagDocumentId(ragService.indexNote(note));
         return noteRepo.save(note);
     }
 
@@ -128,6 +132,8 @@ public class AppController {
             if (request.formulas() != null) note.setFormulas(request.formulas());
             if (request.tags() != null) note.setTags(request.tags());
             note.setMindMap(first(request.mindMap(), note.getMindMap()));
+            note = noteRepo.save(note);
+            ragService.reindexNote(note);
             return ResponseEntity.ok(noteRepo.save(note));
         }).orElseGet(() -> ResponseEntity.notFound().build());
     }
@@ -137,6 +143,9 @@ public class AppController {
                                             @PathVariable long id) {
         long userId = auth.getUserId(authHeader);
         return noteRepo.findById(id).filter(n -> n.getUserId() == userId).map(note -> {
+            if (note.getRagDocumentId() != null) {
+                ragService.deleteNoteDocument(note.getRagDocumentId());
+            }
             noteRepo.delete(note);
             return ResponseEntity.noContent().<Void>build();
         }).orElseGet(() -> ResponseEntity.notFound().build());
@@ -158,6 +167,8 @@ public class AppController {
         List<Note> saved = notes.stream().map(req -> {
             Note note = buildNote(req);
             note.setUserId(userId);
+            note = noteRepo.save(note);
+            note.setRagDocumentId(ragService.indexNote(note));
             return noteRepo.save(note);
         }).toList();
         return Map.of("synced", saved.size(), "items", saved);
@@ -240,6 +251,8 @@ public class AppController {
                              @RequestBody Map<String, Object> payload) {
         Note note = ai.processNote(payload);
         note.setUserId(auth.getUserId(authHeader));
+        note = noteRepo.save(note);
+        note.setRagDocumentId(ragService.indexNote(note));
         return noteRepo.save(note);
     }
 
@@ -257,6 +270,8 @@ public class AppController {
         String mimeType = file.getContentType() != null ? file.getContentType() : "image/jpeg";
         Note note = ai.processImageNote(bytes, mimeType);
         note.setUserId(auth.getUserId(authHeader));
+        note = noteRepo.save(note);
+        note.setRagDocumentId(ragService.indexNote(note));
         return noteRepo.save(note);
     }
 
@@ -276,13 +291,24 @@ public class AppController {
     }
 
     @PostMapping("/ai/makeup/generate")
-    public Map<String, Object> makeup(@RequestBody Map<String, Object> payload) {
-        return ai.makeupPackage(String.valueOf(payload.getOrDefault("course", "专业课程")));
+    public Map<String, Object> makeup(@RequestHeader(value = "Authorization", required = false) String authHeader,
+                                      @RequestBody Map<String, Object> payload) {
+        Long userId = getUserIdOrNull(authHeader);
+        return ai.makeupPackage(userId, String.valueOf(payload.getOrDefault("course", "专业课程")));
+    }
+
+    @PostMapping(value = "/ai/makeup/stream", produces = "text/plain;charset=UTF-8")
+    public StreamingResponseBody makeupStream(@RequestHeader(value = "Authorization", required = false) String authHeader,
+                                               @RequestBody Map<String, Object> payload) {
+        Long userId = getUserIdOrNull(authHeader);
+        return ai.makeupPackageStream(userId, String.valueOf(payload.getOrDefault("course", "专业课程")));
     }
 
     @PostMapping("/ai/chat")
-    public Map<String, Object> chat(@RequestBody Map<String, Object> payload) {
-        return ai.chat(payload);
+    public Map<String, Object> chat(@RequestHeader(value = "Authorization", required = false) String authHeader,
+                                    @RequestBody Map<String, Object> payload) {
+        Long userId = getUserIdOrNull(authHeader);
+        return ai.chat(userId, payload);
     }
 
     @GetMapping("/ai/chat/history")
@@ -460,6 +486,14 @@ public class AppController {
 
     private String first(String candidate, String fallback) {
         return candidate == null || candidate.isBlank() ? fallback : candidate;
+    }
+
+    private Long getUserIdOrNull(String authHeader) {
+        try {
+            return auth.getUserId(authHeader);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private String detectFileType(String filename) {

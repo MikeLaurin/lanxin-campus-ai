@@ -3,6 +3,7 @@ package com.vivo.lanxin.campus.service;
 import com.vivo.lanxin.campus.model.Note;
 import com.vivo.lanxin.campus.model.Reminder;
 import org.springframework.stereotype.Service;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -111,17 +112,65 @@ public class AiMockService {
         return titleResult.filter(t -> !t.isBlank()).orElse(fallbackCourse + "：拍照笔记");
     }
 
-    public Map<String, Object> chat(Map<String, Object> payload) {
+    public Map<String, Object> chat(Long userId, Map<String, Object> payload) {
         String message = text(payload, "message", "");
         if (message.isBlank()) {
             return Map.of("role", "assistant", "answer", "你好！我是小蓝，有什么可以帮你的？");
         }
-        Optional<String> lanxinAnswer = lanxin.chat(
-                "你是蓝心校园 AI 管家小蓝，一个友好、乐于助人的 AI 助手。你的核心场景是校园学习（课堂笔记、DDL、复习计划），但可以自由回答任何问题，不拒绝任何话题。用中文自然交流，语气亲切像朋友。",
-                message
-        );
+
+        String systemPrompt;
+        String userPrompt;
+        boolean ragEnabled = false;
+        List<Map<String, Object>> sources = List.of();
+
+        if (userId != null) {
+            List<RagService.RetrievedChunk> chunks = ragService.retrieveRelevantChunks(userId, message);
+            if (chunks.isEmpty()) {
+                chunks = ragService.retrieveByKeyword(userId, message);
+            }
+            ragEnabled = !chunks.isEmpty();
+            if (ragEnabled) {
+                StringBuilder ctx = new StringBuilder();
+                ctx.append("以下是你之前记录的课堂笔记中与当前问题相关的内容：\n\n");
+                for (int i = 0; i < chunks.size(); i++) {
+                    RagService.RetrievedChunk c = chunks.get(i);
+                    ctx.append("【笔记 ").append(i + 1).append("】（来源：《")
+                            .append(c.getDocumentTitle()).append("》）\n")
+                            .append(c.getContent()).append("\n\n");
+                }
+                systemPrompt = "你是蓝心校园 AI 管家小蓝。请根据以下笔记内容回答用户的问题。"
+                        + "如果笔记内容不足以回答，可以补充你的知识。用中文自然交流，语气亲切像朋友。";
+                userPrompt = ctx + "用户问题：" + message;
+                sources = chunks.stream().map(c -> Map.of(
+                        "documentTitle", (Object) c.getDocumentTitle(),
+                        "content", (Object) (c.getContent().length() > 200
+                                ? c.getContent().substring(0, 200) + "..." : c.getContent()),
+                        "similarity", (Object) c.getSimilarity()
+                )).toList();
+            } else {
+                systemPrompt = "你是蓝心校园 AI 管家小蓝，一个友好、乐于助人的 AI 助手。"
+                        + "你的核心场景是校园学习（课堂笔记、DDL、复习计划），但可以自由回答任何问题，不拒绝任何话题。"
+                        + "用中文自然交流，语气亲切像朋友。";
+                userPrompt = message;
+            }
+        } else {
+            systemPrompt = "你是蓝心校园 AI 管家小蓝，一个友好、乐于助人的 AI 助手。"
+                    + "你的核心场景是校园学习（课堂笔记、DDL、复习计划），但可以自由回答任何问题，不拒绝任何话题。"
+                    + "用中文自然交流，语气亲切像朋友。";
+            userPrompt = message;
+        }
+
+        Optional<String> lanxinAnswer = lanxin.chat(systemPrompt, userPrompt);
         if (lanxinAnswer.isPresent()) {
-            return Map.of("role", "assistant", "answer", lanxinAnswer.get(), "tone", "lanxin");
+            Map<String, Object> response = new java.util.HashMap<>();
+            response.put("role", "assistant");
+            response.put("answer", lanxinAnswer.get());
+            response.put("tone", "lanxin");
+            response.put("ragEnabled", ragEnabled);
+            if (!sources.isEmpty()) {
+                response.put("sources", sources);
+            }
+            return response;
         }
         return Map.of("role", "assistant", "answer", "抱歉，AI 服务暂时不可用，请稍后重试。", "tone", "fallback");
     }
@@ -192,17 +241,69 @@ public class AiMockService {
                 "抱歉，AI 服务暂时不可用，请稍后重试。", "tone", "fallback");
     }
 
-    public Map<String, Object> makeupPackage(String course) {
-        Optional<String> lanxinSummary = lanxin.chat(
-                "请为以下课程生成补课建议，包含知识点要点和自测方向。",
-                course
-        );
+    public Map<String, Object> makeupPackage(Long userId, String course) {
+        String systemPrompt = "请为以下课程生成补课建议，包含知识点要点和自测方向。";
+        String userPrompt = course;
+
+        if (userId != null) {
+            List<RagService.RetrievedChunk> chunks = ragService.retrieveRelevantChunks(userId, course);
+            if (chunks.isEmpty()) {
+                chunks = ragService.retrieveByKeyword(userId, course);
+            }
+            if (!chunks.isEmpty()) {
+                StringBuilder ctx = new StringBuilder();
+                ctx.append("以下是你记录的课堂笔记中与「").append(course).append("」相关的内容：\n\n");
+                for (int i = 0; i < chunks.size(); i++) {
+                    ctx.append("【笔记 ").append(i + 1).append("】")
+                            .append(chunks.get(i).getContent()).append("\n\n");
+                }
+                systemPrompt = "你是一个学习助手。请根据以下笔记内容，为该课程生成个性化补课建议，"
+                        + "包括知识点要点、复习重点和自测题目。要结合笔记中实际出现的内容。";
+                userPrompt = ctx + "课程：" + course + "\n请生成补课建议。";
+            }
+        }
+
+        Optional<String> lanxinSummary = lanxin.chat(systemPrompt, userPrompt);
         return Map.of(
                 "course", course,
                 "summary", lanxinSummary.orElse("建议优先补齐核心定义和课堂例题。"),
                 "knowledgePoints", List.of("核心概念", "典型题型", "易错点"),
                 "quiz", List.of("用自己的话解释核心定义", "完成一道基础题", "指出一个可能考点")
         );
+    }
+
+    public StreamingResponseBody makeupPackageStream(Long userId, String course) {
+        String systemPrompt = "请为以下课程生成补课建议，包含知识点要点和自测方向。用Markdown格式输出。";
+        String userPrompt = course;
+
+        if (userId != null) {
+            List<RagService.RetrievedChunk> chunks = ragService.retrieveRelevantChunks(userId, course);
+            if (chunks.isEmpty()) {
+                chunks = ragService.retrieveByKeyword(userId, course);
+            }
+            if (!chunks.isEmpty()) {
+                StringBuilder ctx = new StringBuilder();
+                ctx.append("以下是你记录的课堂笔记中与「").append(course).append("」相关的内容：\n\n");
+                for (int i = 0; i < chunks.size(); i++) {
+                    ctx.append("【笔记 ").append(i + 1).append("】")
+                            .append(chunks.get(i).getContent()).append("\n\n");
+                }
+                systemPrompt = "你是一个学习助手。请根据以下笔记内容，为该课程生成个性化补课建议，"
+                        + "包括知识点要点、复习重点和自测题目。要结合笔记中实际出现的内容。用Markdown格式输出。";
+                userPrompt = ctx + "课程：" + course + "\n请生成补课建议。";
+            }
+        }
+
+        final String finalSystemPrompt = systemPrompt;
+        final String finalUserPrompt = userPrompt;
+        return outputStream -> lanxin.streamChat(finalSystemPrompt, finalUserPrompt, text -> {
+            try {
+                outputStream.write(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                outputStream.flush();
+            } catch (java.io.IOException ignored) {
+                // client disconnected
+            }
+        });
     }
 
     private String text(Map<String, Object> payload, String key, String fallback) {
