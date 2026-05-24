@@ -27,7 +27,7 @@ public class DocumentChunk {
 
     private int charCount;
 
-    @Column(columnDefinition = "MEDIUMTEXT")
+    @Column(columnDefinition = "CLOB")
     private String embedding;
 
     private LocalDateTime createdAt;

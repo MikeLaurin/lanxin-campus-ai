@@ -301,7 +301,9 @@ public class AppController {
     public StreamingResponseBody makeupStream(@RequestHeader(value = "Authorization", required = false) String authHeader,
                                                @RequestBody Map<String, Object> payload) {
         Long userId = getUserIdOrNull(authHeader);
-        return ai.makeupPackageStream(userId, String.valueOf(payload.getOrDefault("course", "专业课程")));
+        List<Long> noteIds = parseLongList(payload.get("noteIds"));
+        List<Long> documentIds = parseLongList(payload.get("documentIds"));
+        return ai.makeupPackageStream(userId, noteIds, documentIds);
     }
 
     @PostMapping("/ai/chat")
@@ -309,6 +311,14 @@ public class AppController {
                                     @RequestBody Map<String, Object> payload) {
         Long userId = getUserIdOrNull(authHeader);
         return ai.chat(userId, payload);
+    }
+
+    @PostMapping(value = "/ai/chat/stream", produces = "text/plain;charset=UTF-8")
+    public StreamingResponseBody chatStream(@RequestHeader(value = "Authorization", required = false) String authHeader,
+                                            @RequestBody Map<String, Object> payload) {
+        Long userId = getUserIdOrNull(authHeader);
+        String message = String.valueOf(payload.getOrDefault("message", ""));
+        return ai.chatStream(userId, message);
     }
 
     @GetMapping("/ai/chat/history")
@@ -400,6 +410,15 @@ public class AppController {
         long userId = auth.getUserId(authHeader);
         String message = String.valueOf(payload.getOrDefault("message", ""));
         return ai.chatWithRag(userId, message);
+    }
+
+    @PostMapping(value = "/rag/chat/stream", produces = "text/plain;charset=UTF-8")
+    public StreamingResponseBody ragChatStream(
+            @RequestHeader("Authorization") String authHeader,
+            @RequestBody Map<String, Object> payload) {
+        long userId = auth.getUserId(authHeader);
+        String message = String.valueOf(payload.getOrDefault("message", ""));
+        return ai.chatWithRagStream(userId, message);
     }
 
     // ── Reports ───────────────────────────────────────────
@@ -494,6 +513,16 @@ public class AppController {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Long> parseLongList(Object value) {
+        if (value instanceof List<?> list) {
+            return list.stream()
+                    .map(item -> item instanceof Number ? ((Number) item).longValue() : Long.parseLong(String.valueOf(item)))
+                    .toList();
+        }
+        return List.of();
     }
 
     private String detectFileType(String filename) {

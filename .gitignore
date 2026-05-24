@@ -20,3 +20,6 @@ env.sh
 
 # H2 / local database files
 data/
+
+# Claude
+.claude/

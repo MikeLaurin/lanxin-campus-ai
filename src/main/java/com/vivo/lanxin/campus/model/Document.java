@@ -25,7 +25,7 @@ public class Document {
 
     private long fileSize;
 
-    @Column(columnDefinition = "MEDIUMTEXT")
+    @Column(columnDefinition = "CLOB")
     private String fullText;
 
     private int chunkCount;

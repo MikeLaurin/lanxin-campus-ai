@@ -195,9 +195,15 @@
         <section class="section-block">
           <div class="section-head">
             <h2>逃课补课包</h2>
-            <button class="text-button" id="makeupBtn">生成</button>
+            <button class="text-button" id="makeupRefreshSources">刷新素材</button>
           </div>
-          <div id="makeupBox" class="compact-text"></div>
+          <p style="font-size:13px;color:var(--muted);margin-bottom:6px;">选择笔记或文档作为学习素材：</p>
+          <div id="makeupSources" class="item-list" style="max-height:180px;overflow-y:auto;"></div>
+          <button class="primary-action" id="makeupBtn" style="width:100%;margin-top:10px;">
+            <span class="spark-icon"></span>
+            生成补课包
+          </button>
+          <div id="makeupBox" class="compact-text" style="margin-top:10px;"></div>
         </section>
       </div>
 
@@ -221,6 +227,6 @@
       <button data-nav="report"><span class="chart-icon"></span><small>周报</small></button>
     </nav>
   </main>
-  <script src="/app.js?v=3"></script>
+  <script src="/app.js?v=5"></script>
 </body>
 </html>

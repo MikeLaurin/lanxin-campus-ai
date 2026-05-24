@@ -8,17 +8,20 @@ import com.vivo.lanxin.campus.model.Note;
 import com.vivo.lanxin.campus.repository.DocumentChunkRepository;
 import com.vivo.lanxin.campus.repository.DocumentRepository;
 import com.vivo.lanxin.campus.repository.NoteRepository;
-import org.apache.pdfbox.Loader;
-import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.Scanner;
 import java.util.stream.Collectors;
 
 @Service
@@ -27,7 +30,7 @@ public class RagService {
     private static final int CHUNK_OVERLAP_CHARS = 200;
     private static final int TOP_K = 5;
     private static final double SIMILARITY_THRESHOLD = 0.6;
-    private static final int MAX_TEXT_LENGTH = 200_000;
+    private static final int EMBEDDING_BATCH_SIZE = 5;
 
     private final DocumentRepository documentRepo;
     private final DocumentChunkRepository chunkRepo;
@@ -50,12 +53,26 @@ public class RagService {
     // ── Text Extraction ─────────────────────────────────────
 
     public String extractPdfText(InputStream pdfStream) throws IOException {
-        byte[] bytes = pdfStream.readAllBytes();
-        try (var pdfDocument = Loader.loadPDF(bytes)) {
-            var stripper = new PDFTextStripper();
-            stripper.setSortByPosition(true);
-            String text = stripper.getText(pdfDocument);
-            return text != null ? text.trim() : "";
+        Path tempFile = Files.createTempFile("pdf-upload-", ".pdf");
+        try {
+            Files.copy(pdfStream, tempFile, StandardCopyOption.REPLACE_EXISTING);
+            ProcessBuilder pb = new ProcessBuilder(
+                    "pdftotext", "-layout", "-nopgbrk",
+                    tempFile.toAbsolutePath().toString(), "-"
+            );
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+            try (Scanner scanner = new Scanner(process.getInputStream(), StandardCharsets.UTF_8)) {
+                scanner.useDelimiter("\\A");
+                String text = scanner.hasNext() ? scanner.next() : "";
+                process.waitFor();
+                return text.trim();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("PDF text extraction interrupted", e);
+        } finally {
+            Files.deleteIfExists(tempFile);
         }
     }
 
@@ -97,11 +114,17 @@ public class RagService {
         while (start < text.length()) {
             int end = Math.min(start + chunkSize, text.length());
 
-            if (end < text.length()) {
-                int breakPoint = findBestBreakPoint(text, start, end);
-                if (breakPoint > start) {
-                    end = breakPoint;
+            if (end >= text.length()) {
+                String chunk = text.substring(start).trim();
+                if (!chunk.isEmpty()) {
+                    chunks.add(chunk);
                 }
+                break;
+            }
+
+            int breakPoint = findBestBreakPoint(text, start, end);
+            if (breakPoint > start) {
+                end = breakPoint;
             }
 
             String chunk = text.substring(start, end).trim();
@@ -110,7 +133,6 @@ public class RagService {
             }
 
             start = end - overlap;
-            if (start >= text.length()) break;
             if (start <= 0) start = end;
         }
         return chunks;
@@ -153,18 +175,6 @@ public class RagService {
 
     // ── Embedding ───────────────────────────────────────────
 
-    private Optional<String> generateEmbedding(String text) {
-        return lanxin.embedding(text).map(this::serializeEmbedding);
-    }
-
-    private String serializeEmbedding(float[] embedding) {
-        try {
-            return objectMapper.writeValueAsString(embedding);
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException("Failed to serialize embedding", e);
-        }
-    }
-
     private float[] deserializeEmbedding(String json) {
         try {
             return objectMapper.readValue(json, float[].class);
@@ -177,14 +187,6 @@ public class RagService {
 
     public Document ingestDocument(long userId, String title, String originalFilename,
                                     String fileType, InputStream fileStream) {
-        Document doc = new Document();
-        doc.setUserId(userId);
-        doc.setTitle(title);
-        doc.setOriginalFilename(originalFilename);
-        doc.setFileType(fileType.toUpperCase());
-        doc.setStatus("PROCESSING");
-        documentRepo.save(doc);
-
         try {
             System.out.println("[RagService] Starting text extraction for: " + originalFilename);
             String fullText;
@@ -199,52 +201,65 @@ public class RagService {
                 throw new IOException("文档内容为空或无法提取文字");
             }
 
-            if (fullText.length() > MAX_TEXT_LENGTH) {
-                fullText = fullText.substring(0, MAX_TEXT_LENGTH);
-            }
-
-            doc.setFullText(fullText);
-            doc.setFileSize(fullText.length());
-
+            System.out.println("[RagService] Chunking text...");
             List<String> chunks = chunkText(fullText);
+            fullText = null;
+            System.out.println("[RagService] Chunk count: " + chunks.size());
+
             if (chunks.isEmpty()) {
                 throw new IOException("文档分块后无有效内容");
             }
 
-            List<DocumentChunk> chunkEntities = new ArrayList<>();
-            for (int i = 0; i < chunks.size(); i++) {
-                String chunkText = chunks.get(i);
+            Document doc = new Document();
+            doc.setUserId(userId);
+            doc.setTitle(title);
+            doc.setOriginalFilename(originalFilename);
+            doc.setFileType(fileType.toUpperCase());
+            doc.setStatus("PROCESSING");
+            doc.setFileSize(0);
+            documentRepo.save(doc);
 
-                DocumentChunk chunk = new DocumentChunk();
-                chunk.setUserId(userId);
-                chunk.setDocumentId(doc.getId());
-                chunk.setChunkIndex(i);
-                chunk.setContent(chunkText);
-                chunk.setCharCount(chunkText.length());
+            int totalChunks = chunks.size();
+            for (int i = 0; i < totalChunks; i += EMBEDDING_BATCH_SIZE) {
+                int batchEnd = Math.min(i + EMBEDDING_BATCH_SIZE, totalChunks);
+                List<DocumentChunk> batch = new ArrayList<>(batchEnd - i);
 
-                Optional<String> embedding = generateEmbedding(chunkText);
-                if (embedding.isPresent()) {
-                    chunk.setEmbedding(embedding.get());
-                } else {
-                    chunk.setEmbedding(null);
+                for (int j = i; j < batchEnd; j++) {
+                    String chunkText = chunks.get(j);
+                    DocumentChunk chunk = new DocumentChunk();
+                    chunk.setUserId(userId);
+                    chunk.setDocumentId(doc.getId());
+                    chunk.setChunkIndex(j);
+                    chunk.setContent(chunkText);
+                    chunk.setCharCount(chunkText.length());
+                    batch.add(chunk);
                 }
 
-                chunkEntities.add(chunk);
+                System.out.println("[RagService] Saving chunks " + (i + 1) + "-" + batchEnd + " / " + totalChunks);
+                chunkRepo.saveAll(batch);
+                batch.clear();
             }
 
-            chunkRepo.saveAll(chunkEntities);
-
-            doc.setChunkCount(chunks.size());
+            doc.setChunkCount(totalChunks);
             doc.setStatus("READY");
             documentRepo.save(doc);
 
             return doc;
 
         } catch (Exception e) {
-            doc.setStatus("FAILED");
-            doc.setErrorMessage(e.getMessage());
-            documentRepo.save(doc);
-            return doc;
+            System.err.println("[RagService] Ingestion failed: " + e.getMessage());
+            try {
+                Document doc = new Document();
+                doc.setUserId(userId);
+                doc.setTitle(title);
+                doc.setOriginalFilename(originalFilename);
+                doc.setFileType(fileType.toUpperCase());
+                doc.setStatus("FAILED");
+                doc.setErrorMessage(e.getMessage());
+                return documentRepo.save(doc);
+            } catch (Exception ex) {
+                throw new RuntimeException("Failed to save failed document", e);
+            }
         }
     }
 
@@ -252,38 +267,60 @@ public class RagService {
 
     public List<RetrievedChunk> retrieveRelevantChunks(long userId, String query) {
         Optional<float[]> queryEmbedding = lanxin.embedding(query);
-        if (queryEmbedding.isEmpty()) {
-            return List.of();
+        if (queryEmbedding.isPresent()) {
+            List<RetrievedChunk> vectorResults = vectorSearch(userId, queryEmbedding.get());
+            if (!vectorResults.isEmpty()) {
+                return vectorResults;
+            }
         }
+        return keywordSearchChunks(userId, query);
+    }
 
+    private List<RetrievedChunk> vectorSearch(long userId, float[] queryEmbedding) {
         List<DocumentChunk> allChunks = chunkRepo.findByUserId(userId);
-
         List<ScoredChunk> scoredChunks = new ArrayList<>();
         for (DocumentChunk chunk : allChunks) {
             if (chunk.getEmbedding() == null || chunk.getEmbedding().isBlank()) {
                 continue;
             }
             float[] chunkEmbedding = deserializeEmbedding(chunk.getEmbedding());
-            double similarity = cosineSimilarity(queryEmbedding.get(), chunkEmbedding);
+            double similarity = cosineSimilarity(queryEmbedding, chunkEmbedding);
             if (similarity >= SIMILARITY_THRESHOLD) {
                 scoredChunks.add(new ScoredChunk(chunk, similarity));
             }
         }
-
         return scoredChunks.stream()
                 .sorted((a, b) -> Double.compare(b.similarity, a.similarity))
                 .limit(TOP_K)
-                .map(sc -> {
-                    Document doc = documentRepo.findById(sc.chunk.getDocumentId()).orElse(null);
-                    String docTitle = doc != null ? doc.getTitle() : "Unknown";
-                    return new RetrievedChunk(
-                            sc.chunk.getContent(),
-                            docTitle,
-                            sc.similarity,
-                            sc.chunk.getChunkIndex()
-                    );
-                })
+                .map(sc -> toRetrievedChunk(sc.chunk, sc.similarity))
                 .collect(Collectors.toList());
+    }
+
+    private List<RetrievedChunk> keywordSearchChunks(long userId, String query) {
+        List<DocumentChunk> allChunks = chunkRepo.findByUserId(userId);
+        if (allChunks.isEmpty()) return List.of();
+
+        String[] keywords = query.toLowerCase().split("[\\s，。！？,.!?]+");
+        return allChunks.stream()
+                .filter(chunk -> chunk.getContent() != null && matchesChunkKeywords(chunk.getContent(), keywords))
+                .sorted((a, b) -> Integer.compare(b.getCharCount(), a.getCharCount()))
+                .limit(TOP_K)
+                .map(chunk -> toRetrievedChunk(chunk, 0.0))
+                .collect(Collectors.toList());
+    }
+
+    private boolean matchesChunkKeywords(String content, String[] keywords) {
+        String lower = content.toLowerCase();
+        for (String kw : keywords) {
+            if (kw.length() >= 2 && lower.contains(kw)) return true;
+        }
+        return false;
+    }
+
+    private RetrievedChunk toRetrievedChunk(DocumentChunk chunk, double similarity) {
+        Document doc = documentRepo.findById(chunk.getDocumentId()).orElse(null);
+        String docTitle = doc != null ? doc.getTitle() : "Unknown";
+        return new RetrievedChunk(chunk.getContent(), docTitle, similarity, chunk.getChunkIndex());
     }
 
     private double cosineSimilarity(float[] a, float[] b) {
@@ -311,6 +348,7 @@ public class RagService {
         return documentRepo.findByUserIdOrderByCreatedAtDesc(userId);
     }
 
+    @Transactional
     public void deleteDocument(long userId, long documentId) {
         documentRepo.findById(documentId).ifPresent(doc -> {
             if (doc.getUserId() == userId) {
@@ -347,6 +385,7 @@ public class RagService {
         return false;
     }
 
+    @Transactional
     public void deleteNoteDocument(long documentId) {
         chunkRepo.deleteByDocumentId(documentId);
         documentRepo.deleteById(documentId);
@@ -374,7 +413,6 @@ public class RagService {
             chunk.setChunkIndex(i);
             chunk.setContent(chunkText);
             chunk.setCharCount(chunkText.length());
-            generateEmbedding(chunkText).ifPresent(chunk::setEmbedding);
             chunkEntities.add(chunk);
         }
         chunkRepo.saveAll(chunkEntities);

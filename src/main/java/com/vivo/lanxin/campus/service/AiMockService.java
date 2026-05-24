@@ -1,7 +1,10 @@
 package com.vivo.lanxin.campus.service;
 
+import com.vivo.lanxin.campus.model.Document;
 import com.vivo.lanxin.campus.model.Note;
 import com.vivo.lanxin.campus.model.Reminder;
+import com.vivo.lanxin.campus.repository.DocumentRepository;
+import com.vivo.lanxin.campus.repository.NoteRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
@@ -20,10 +23,15 @@ public class AiMockService {
     private static final Pattern DAYS_PATTERN = Pattern.compile("(\\d+)\\s*[天日]");
     private final LanxinApiClient lanxin;
     private final RagService ragService;
+    private final NoteRepository noteRepo;
+    private final DocumentRepository documentRepo;
 
-    public AiMockService(LanxinApiClient lanxin, RagService ragService) {
+    public AiMockService(LanxinApiClient lanxin, RagService ragService,
+                         NoteRepository noteRepo, DocumentRepository documentRepo) {
         this.lanxin = lanxin;
         this.ragService = ragService;
+        this.noteRepo = noteRepo;
+        this.documentRepo = documentRepo;
     }
 
     public Note processNote(Map<String, Object> payload) {
@@ -272,26 +280,170 @@ public class AiMockService {
         );
     }
 
-    public StreamingResponseBody makeupPackageStream(Long userId, String course) {
-        String systemPrompt = "请为以下课程生成补课建议，包含知识点要点和自测方向。用Markdown格式输出。";
-        String userPrompt = course;
+    public StreamingResponseBody makeupPackageStream(Long userId, List<Long> noteIds, List<Long> documentIds) {
+        StringBuilder contextBuilder = new StringBuilder();
+        boolean hasSources = false;
+
+        if (noteIds != null && !noteIds.isEmpty()) {
+            List<Note> notes = noteRepo.findAllById(noteIds);
+            if (userId != null) {
+                notes = notes.stream().filter(n -> n.getUserId() == userId).toList();
+            }
+            if (!notes.isEmpty()) {
+                hasSources = true;
+                contextBuilder.append("以下是你选择的课堂笔记内容：\n\n");
+                for (int i = 0; i < notes.size(); i++) {
+                    Note note = notes.get(i);
+                    contextBuilder.append("【笔记 ").append(i + 1).append("】").append(note.getTitle()).append("\n");
+                    contextBuilder.append(note.getRawText()).append("\n\n");
+                }
+            }
+        }
+
+        if (documentIds != null && !documentIds.isEmpty()) {
+            List<Document> docs = documentRepo.findAllById(documentIds);
+            if (userId != null) {
+                docs = docs.stream().filter(d -> d.getUserId() == userId).toList();
+            }
+            if (!docs.isEmpty()) {
+                hasSources = true;
+                contextBuilder.append("以下是你上传的参考文档内容：\n\n");
+                for (int i = 0; i < docs.size(); i++) {
+                    Document doc = docs.get(i);
+                    contextBuilder.append("【文档 ").append(i + 1).append("】").append(doc.getTitle()).append("\n");
+                    String text = doc.getFullText();
+                    if (text != null && text.length() > 3000) {
+                        text = text.substring(0, 3000) + "\n...(内容过长已截断)";
+                    }
+                    contextBuilder.append(text != null ? text : "(无文本内容)").append("\n\n");
+                }
+            }
+        }
+
+        final String systemPrompt;
+        final String userPrompt;
+
+        if (hasSources) {
+            systemPrompt = "你是一个学习助手。请根据以下笔记/文档内容，生成个性化补课建议，"
+                    + "包括知识点要点、复习重点和自测题目。要紧密结合内容中实际出现的知识点。用Markdown格式输出。";
+            userPrompt = contextBuilder.toString() + "请根据以上内容生成补课建议。";
+        } else {
+            systemPrompt = "你是一个学习助手。请生成通用学科学习建议，包括知识点要点、复习方法和自测方向。用Markdown格式输出。";
+            userPrompt = "请生成通用学习建议，涵盖笔记整理方法、复习策略和自测技巧。";
+        }
+
+        final String finalSystemPrompt = systemPrompt;
+        final String finalUserPrompt = userPrompt;
+        return outputStream -> lanxin.streamChat(finalSystemPrompt, finalUserPrompt, text -> {
+            try {
+                outputStream.write(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                outputStream.flush();
+            } catch (java.io.IOException ignored) {
+                // client disconnected
+            }
+        });
+    }
+
+    public StreamingResponseBody chatStream(Long userId, String message) {
+        String systemPrompt;
+        String userPrompt;
+
+        if (message == null || message.isBlank()) {
+            final String greeting = "你好！我是小蓝，有什么可以帮你的？";
+            return outputStream -> {
+                try {
+                    outputStream.write(greeting.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    outputStream.flush();
+                } catch (java.io.IOException ignored) {}
+            };
+        }
 
         if (userId != null) {
-            List<RagService.RetrievedChunk> chunks = ragService.retrieveRelevantChunks(userId, course);
+            List<RagService.RetrievedChunk> chunks = ragService.retrieveRelevantChunks(userId, message);
             if (chunks.isEmpty()) {
-                chunks = ragService.retrieveByKeyword(userId, course);
+                chunks = ragService.retrieveByKeyword(userId, message);
             }
             if (!chunks.isEmpty()) {
                 StringBuilder ctx = new StringBuilder();
-                ctx.append("以下是你记录的课堂笔记中与「").append(course).append("」相关的内容：\n\n");
+                ctx.append("以下是你之前记录的课堂笔记中与当前问题相关的内容：\n\n");
                 for (int i = 0; i < chunks.size(); i++) {
-                    ctx.append("【笔记 ").append(i + 1).append("】")
-                            .append(chunks.get(i).getContent()).append("\n\n");
+                    RagService.RetrievedChunk c = chunks.get(i);
+                    ctx.append("【笔记 ").append(i + 1).append("】（来源：《")
+                            .append(c.getDocumentTitle()).append("》）\n")
+                            .append(c.getContent()).append("\n\n");
                 }
-                systemPrompt = "你是一个学习助手。请根据以下笔记内容，为该课程生成个性化补课建议，"
-                        + "包括知识点要点、复习重点和自测题目。要结合笔记中实际出现的内容。用Markdown格式输出。";
-                userPrompt = ctx + "课程：" + course + "\n请生成补课建议。";
+                systemPrompt = "你是蓝心校园 AI 管家小蓝。请根据以下笔记内容回答用户的问题。"
+                        + "如果笔记内容不足以回答，可以补充你的知识。用中文自然交流，语气亲切像朋友。";
+                userPrompt = ctx + "用户问题：" + message;
+            } else {
+                systemPrompt = "你是蓝心校园 AI 管家小蓝，一个友好、乐于助人的 AI 助手。"
+                        + "你的核心场景是校园学习（课堂笔记、DDL、复习计划），但可以自由回答任何问题，不拒绝任何话题。"
+                        + "用中文自然交流，语气亲切像朋友。";
+                userPrompt = message;
             }
+        } else {
+            systemPrompt = "你是蓝心校园 AI 管家小蓝，一个友好、乐于助人的 AI 助手。"
+                    + "你的核心场景是校园学习（课堂笔记、DDL、复习计划），但可以自由回答任何问题，不拒绝任何话题。"
+                    + "用中文自然交流，语气亲切像朋友。";
+            userPrompt = message;
+        }
+
+        final String finalSystemPrompt = systemPrompt;
+        final String finalUserPrompt = userPrompt;
+        return outputStream -> lanxin.streamChat(finalSystemPrompt, finalUserPrompt, text -> {
+            try {
+                outputStream.write(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                outputStream.flush();
+            } catch (java.io.IOException ignored) {
+                // client disconnected
+            }
+        });
+    }
+
+    public StreamingResponseBody chatWithRagStream(long userId, String message) {
+        if (message == null || message.isBlank()) {
+            final String greeting = "你好！我是小蓝，有什么可以帮你的？";
+            return outputStream -> {
+                try {
+                    outputStream.write(greeting.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    outputStream.flush();
+                } catch (java.io.IOException ignored) {}
+            };
+        }
+
+        List<RagService.RetrievedChunk> chunks = ragService.retrieveRelevantChunks(userId, message);
+        boolean ragEnabled = !chunks.isEmpty();
+
+        String systemPrompt;
+        String userPrompt;
+
+        if (ragEnabled) {
+            StringBuilder contextBuilder = new StringBuilder();
+            contextBuilder.append("以下是你上传的参考资料中与用户问题相关的内容：\n\n");
+            for (int i = 0; i < chunks.size(); i++) {
+                RagService.RetrievedChunk chunk = chunks.get(i);
+                contextBuilder.append("【参考资料 ")
+                        .append(i + 1)
+                        .append("】（来源：《")
+                        .append(chunk.getDocumentTitle())
+                        .append("》，相关度: ")
+                        .append(String.format("%.0f%%", chunk.getSimilarity() * 100))
+                        .append("）\n")
+                        .append(chunk.getContent())
+                        .append("\n\n");
+            }
+
+            systemPrompt = "你是蓝心校园 AI 管家小蓝。你的核心场景是校园学习。\n"
+                    + "重要：请根据以下参考资料回答用户问题。如果参考资料不足以回答问题，\n"
+                    + "请如实说明并基于你的知识补充。引用资料时请注明来源。用中文回答。";
+
+            userPrompt = contextBuilder.toString()
+                    + "用户问题：" + message + "\n\n"
+                    + "请根据以上参考资料回答。";
+        } else {
+            systemPrompt = "你是蓝心校园 AI 管家小蓝，一个友好、乐于助人的 AI 助手。"
+                    + "你的核心场景是校园学习。用中文自然交流，语气亲切像朋友。";
+            userPrompt = message;
         }
 
         final String finalSystemPrompt = systemPrompt;

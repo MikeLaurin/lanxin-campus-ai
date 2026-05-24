@@ -105,7 +105,7 @@ function navTo(panel) {
   $$(".bottom-nav button").forEach((node) => node.classList.toggle("active", node.dataset.nav === panel));
   if (panel === "notes") loadNotes();
   if (panel === "tasks") loadTasks();
-  if (panel === "ai") loadDocuments();
+  if (panel === "ai") { loadDocuments(); loadMakeupSources(); }
   if (panel === "report") loadReport();
 }
 
@@ -211,15 +211,18 @@ async function parseDdl() {
   await Promise.all([loadTasks(), loadDashboard()]);
 }
 
-function appendMessage(role, content) {
-  const node = document.createElement("div");
-  node.className = `message ${role}`;
-  const escaped = content
+function escapeHtml(text) {
+  return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/\n/g, "<br>");
-  node.innerHTML = escaped;
+}
+
+function appendMessage(role, content) {
+  const node = document.createElement("div");
+  node.className = `message ${role}`;
+  node.innerHTML = escapeHtml(content);
   $("#chatBox").appendChild(node);
   $("#chatBox").scrollTop = $("#chatBox").scrollHeight;
 }
@@ -233,26 +236,40 @@ async function sendRagChat() {
   appendMessage("user", message);
 
   const useRag = $("#ragToggle").checked;
-  const endpoint = useRag ? "/api/v1/rag/chat" : "/api/v1/ai/chat";
+  const endpoint = useRag ? "/api/v1/rag/chat/stream" : "/api/v1/ai/chat/stream";
 
   try {
-    const answer = await api(endpoint, {
+    const response = await fetch(endpoint, {
       method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(state.token ? { "Authorization": "Bearer " + state.token } : {})
+      },
       body: JSON.stringify({ message })
     });
 
-    appendMessage("assistant", answer.answer);
+    if (response.status === 401) { showAuth(); return; }
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      let msg = text;
+      try { const json = JSON.parse(text); msg = json.error || msg; } catch (_) {}
+      throw new Error(msg || `请求失败 (${response.status})`);
+    }
 
-    if (answer.ragEnabled && answer.sources) {
-      const chatBox = $("#chatBox");
-      const sourcesDiv = document.createElement("div");
-      sourcesDiv.className = "message assistant rag-sources";
-      sourcesDiv.innerHTML = "<strong>参考来源：</strong><br>" +
-        answer.sources.map((s, i) =>
-          `${i + 1}. 《${s.documentTitle}》 (相关度: ${Math.round(s.similarity * 100)}%)`
-        ).join("<br>");
-      chatBox.appendChild(sourcesDiv);
-      chatBox.scrollTop = chatBox.scrollHeight;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    const msgDiv = document.createElement("div");
+    msgDiv.className = "message assistant";
+    $("#chatBox").appendChild(msgDiv);
+
+    let fullText = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      fullText += decoder.decode(value, { stream: true });
+      msgDiv.innerHTML = escapeHtml(fullText);
+      $("#chatBox").scrollTop = $("#chatBox").scrollHeight;
     }
   } catch (err) {
     appendMessage("assistant", "抱歉，回复失败: " + err.message);
@@ -332,9 +349,62 @@ async function uploadDocument(file) {
   }
 }
 
+async function loadMakeupSources() {
+  try {
+    const [notes, docs] = await Promise.all([
+      api("/api/v1/notes"),
+      api("/api/v1/rag/documents")
+    ]);
+
+    const container = $("#makeupSources");
+    if (notes.length === 0 && docs.length === 0) {
+      container.innerHTML = empty("暂无笔记或文档，请先拍照上传或录入笔记");
+      return;
+    }
+
+    let html = "";
+    notes.forEach(note => {
+      html += `
+        <label class="makeup-source-item">
+          <input type="checkbox" class="makeup-checkbox" data-type="note" data-id="${note.id}">
+          <div>
+            <strong>${escapeHtml(note.title)}</strong>
+            <span class="tag">笔记 · ${escapeHtml(note.course)}</span>
+          </div>
+        </label>
+      `;
+    });
+
+    docs.filter(d => d.status === "READY").forEach(doc => {
+      html += `
+        <label class="makeup-source-item">
+          <input type="checkbox" class="makeup-checkbox" data-type="document" data-id="${doc.id}">
+          <div>
+            <strong>${escapeHtml(doc.title)}</strong>
+            <span class="tag">${doc.fileType} 文档</span>
+          </div>
+        </label>
+      `;
+    });
+
+    container.innerHTML = html || empty("暂无可用素材");
+  } catch (err) {
+    console.error("Load makeup sources failed:", err);
+  }
+}
+
 async function loadMakeup() {
   const box = $("#makeupBox");
-  box.innerHTML = "<strong>数据结构</strong><br><br><span id='makeupStream'></span>";
+
+  const noteIds = [];
+  const documentIds = [];
+  $$(".makeup-checkbox:checked").forEach(cb => {
+    const id = parseInt(cb.dataset.id);
+    if (cb.dataset.type === "note") noteIds.push(id);
+    else documentIds.push(id);
+  });
+
+  box.innerHTML = "<strong>生成中...</strong><br><br><span id='makeupStream'></span>";
 
   try {
     const response = await fetch("/api/v1/ai/makeup/stream", {
@@ -343,7 +413,7 @@ async function loadMakeup() {
         "Content-Type": "application/json",
         ...(state.token ? { "Authorization": "Bearer " + state.token } : {})
       },
-      body: JSON.stringify({ course: "数据结构" })
+      body: JSON.stringify({ noteIds, documentIds })
     });
 
     if (response.status === 401) { showAuth(); return; }
@@ -571,6 +641,7 @@ function bindEvents() {
 
   // Makeup
   $("#makeupBtn").addEventListener("click", loadMakeup);
+  $("#makeupRefreshSources").addEventListener("click", loadMakeupSources);
 
   // Refresh
   $("#refreshToday").addEventListener("click", loadDashboard);

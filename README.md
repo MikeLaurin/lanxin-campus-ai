@@ -45,6 +45,8 @@ java -jar target/campus-ai-1.0.0.jar
 ### 3. 打开浏览器
 
 ```
+
+
 http://localhost:8080
 ```
 
@@ -58,13 +60,13 @@ http://localhost:8080
 
 ## 技术栈
 
-- 后端：Spring Boot 3.4.1 + Spring Data JPA
+- 后端：Spring Boot 3.4.1 + Spring Data JPA，Java 21
 - 数据库：H2 文件数据库（数据文件 `./data/campus-ai.mv.db`）
 - 前端：HTML + CSS + JavaScript（托管在 `src/main/resources/static/`）
 - 认证：BCrypt 密码加密 + Token 令牌（服务端 ConcurrentHashMap）
 - AI：vivo AIGC OpenAI 兼容接口（失败自动降级 mock）
-- RAG：PDF/TXT 上传 → 分块(1000字+200重叠) → embedding 向量化 → 余弦相似度检索 → 增强对话
-- 流式输出：纯文本 StreamingResponseBody，逐字渲染，段落格式完整保留
+- RAG：PDF/TXT 上传 → `pdftotext` 提取文本 → 分块(1000字+200重叠) → embedding 向量化 → 余弦相似度检索 → 增强对话；embedding 不可用时自动降级关键词匹配
+- 流式输出：Spring `StreamingResponseBody` + 前端 `ReadableStream` API，纯文本逐字渲染
 
 ## 项目结构
 
@@ -86,7 +88,8 @@ lanxin-campus-ai/
 │   └── test/
 │       ├── java/.../AppControllerTest.java     # 5 个集成测试
 │       └── resources/application.yml           # 测试用 H2 配置
-└── PROJECT_CONTEXT.md                          # 详细开发上下文
+├── PROJECT_CONTEXT.md                          # 详细开发上下文
+└── COMPETITION_PROPOSAL.md                     # 原始竞赛方案
 ```
 
 ## 已实现功能
@@ -94,13 +97,14 @@ lanxin-campus-ai/
 - 用户注册/登录（BCrypt 加密，Token 鉴权，数据隔离）
 - 课堂多模态智能笔记：真实图片上传（点击/拖拽），AI 识别板书/PPT，结构化整理
 - DDL 智能管理：从文本解析课程、截止日期、优先级
-- AI 学习搭子：自由对话，不限话题，自动引用用户笔记知识库
-- RAG 知识库增强对话：上传 PDF/TXT 参考资料后，AI 基于文档内容回答，显示参考来源
+- AI 学习搭子：流式对话，不限话题，自动引用用户笔记知识库
+- RAG 知识库增强对话：上传 PDF/TXT 参考资料后，AI 基于文档内容流式回答
 - 笔记自动入 RAG：创建/更新笔记时自动索引，AI 对话和补课包均可检索到
-- 逃课补课包：流式输出（纯文本流，逐字渲染，Markdown 段落完整保留），结合 RAG 个性化生成
+- 逃课补课包：勾选笔记/文档作为素材，流式生成个性化学习建议
 - 学习周报：笔记、DDL 完成情况、鼓励式反馈
 - 首页仪表盘：统计看板、今日待办、最近笔记
-- 模型思考模式已禁用：避免 Doubao-Seed-2.0-mini 的推理过程混入输出文本
+- 模型思考模式已禁用：避免推理过程混入输出文本
+- 所有 AI 交互均已支持流式输出（聊天、RAG 问答、补课包）
 
 ## 主要接口
 
@@ -131,12 +135,14 @@ lanxin-campus-ai/
 - `POST /api/v1/rag/documents` — 上传文档（PDF/TXT，multipart）
 - `GET /api/v1/rag/documents` — 文档列表
 - `DELETE /api/v1/rag/documents/{id}` — 删除文档
-- `POST /api/v1/rag/chat` — RAG 增强对话
+- `POST /api/v1/rag/chat` — RAG 增强对话（一次性返回）
+- `POST /api/v1/rag/chat/stream` — RAG 增强对话（流式输出）
 
 ### AI & 统计
-- `POST /api/v1/ai/chat` — AI 对话（自动结合 RAG 笔记知识库）
+- `POST /api/v1/ai/chat` — AI 对话（一次性返回）
+- `POST /api/v1/ai/chat/stream` — AI 对话（流式输出，自动结合笔记知识库）
 - `POST /api/v1/ai/makeup/generate` — 补课包（一次性返回）
-- `POST /api/v1/ai/makeup/stream` — 补课包（流式输出，纯文本逐字渲染）
+- `POST /api/v1/ai/makeup/stream` — 补课包（流式输出，传入 noteIds + documentIds 选择素材）
 - `GET /api/v1/reports/weekly` — 学习周报
 - `GET /api/v1/stats/dashboard` — 统计看板
 - `GET /api/v1/ai/provider/status` — 模型配置状态
@@ -159,6 +165,10 @@ mvn test
 mvn clean package -DskipTests
 java -jar target/campus-ai-1.0.0.jar
 ```
+
+**推荐开发模式**：使用 `mvn spring-boot:run`，修改静态文件后无需重新打包即可生效。JVM 已配置 1GB 堆内存（`pom.xml` 中的 `spring-boot-maven-plugin` 配置）。
+
+**PDF 提取依赖**：RAG 需要系统安装 `pdftotext`（poppler-utils）。Windows 可下载 [poppler for Windows](http://blog.alivate.com.au/poppler-windows/)，将 `bin/` 加入 PATH。如未安装，PDF 上传会失败。
 
 **图片压缩**：上传前客户端会自动压缩（Canvas 缩放至 1920px，JPEG 质量 0.7）。手机照片通常 5-15MB，不压缩会超时。
 

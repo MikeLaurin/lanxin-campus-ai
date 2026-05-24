@@ -86,13 +86,18 @@ JDBC URL: `jdbc:h2:file:./data/campus-ai`，用户名 `sa`，密码留空。
 - AI 对话（自由对话，不限制话题）
 - 逃课补课包
 - 学习周报
-- **RAG 知识库增强对话**：PDF/TXT 上传 → 分块(1000字+200重叠) → embedding 向量化 → 余弦相似度检索 → 注入 prompt，失败自动降级普通对话
-- **笔记自动入 RAG**：创建/更新笔记时自动索引到 RAG 知识库，AI 对话和补课包会引用用户笔记内容；embedding 不可用时自动降级为关键词匹配检索
-- **流式补课包**：POST /api/v1/ai/makeup/stream 纯文本流式输出，逐字渲染，段落格式完整保留
+- **RAG 知识库增强对话**：PDF/TXT 上传 → `pdftotext` 提取文本 → 分块(1000字+200重叠) → embedding 向量化 → 余弦相似度检索 → 注入 prompt，失败自动降级关键词匹配
+- **笔记自动入 RAG**：创建/更新笔记时自动索引到 RAG 知识库，AI 对话和补课包会引用用户笔记内容
+- **全平台流式输出**：所有 AI 交互（小蓝对话、RAG 问答、补课包）均支持流式输出。后端 `StreamingResponseBody` + `LanxinApiClient.streamChat()`，前端 `response.body.getReader()` + `TextDecoder` 逐字渲染
+- **补课包素材选择**：逃课补课包支持勾选笔记/文档作为生成素材，未选素材时自动生成通用学习建议
+- **文档删除修复**：RAG 文档和笔记文档删除方法已添加 `@Transactional` 注解，修复 JPA 删除报错
+- **PDF 提取**：改用系统 `pdftotext` 工具替代 PDFBox，无需 Java 依赖
+- **embedding 批量保存**：文档分块改为每 5 个一批保存，避免大批次内存溢出
 - **模型思考模式已禁用**：API 请求中设置 `"thinking": {"type": "disabled"}`，避免推理过程混入输出
 - 统计看板
 - 蓝心模型配置状态诊断
 - 所有数据按用户隔离
+- JVM 启动配置 1GB 堆内存
 
 "拍照笔记"页已实现真实图片上传：前端支持点击选图/拖拽上传，后端通过 vivo AIGC 多模态接口（image_url）识别图片中的板书内容，再由 AI 生成结构化笔记和复习摘要。
 
@@ -165,19 +170,19 @@ src/main/java/com/vivo/lanxin/campus/service/AuthService.java
 AI 业务封装：
 
 ```
-src/main/java/com/vivo/lanxin/campus/service/AiMockService.java    (笔记处理、AI对话、补课包、流式补课包)
+src/main/java/com/vivo/lanxin/campus/service/AiMockService.java    (笔记处理、AI对话、补课包、chatStream、chatWithRagStream、makeupPackageStream)
 ```
 
 RAG 服务：
 
 ```
-src/main/java/com/vivo/lanxin/campus/service/RagService.java       (文本提取/分块/embedding/检索/笔记索引)
+src/main/java/com/vivo/lanxin/campus/service/RagService.java       (pdftotext提取/分块/embedding/向量检索/关键词检索/笔记索引/文档删除)
 ```
 
 vivo AIGC API 客户端：
 
 ```
-src/main/java/com/vivo/lanxin/campus/service/LanxinApiClient.java  (chat、chatWithImage、streamChat、embedding)
+src/main/java/com/vivo/lanxin/campus/service/LanxinApiClient.java  (chat、chatWithImage、streamChat、mockStream、embedding)
 ```
 
 前端：
@@ -310,13 +315,14 @@ Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
 - H2 文件数据库 + JPA 正常工作
 - BCrypt 密码加密 + Token 认证正常
 - 用户数据隔离（每个用户只看自己的笔记/DDL）
-- 官方文档已读取并按文档实现 `requestId`
 - 真实模型 `Doubao-Seed-2.0-mini` 支持 `image_url` 多模态输入
-- AI 对话已移除话题限制和字数限制
 - 图片上传全链路验证通过
-- RAG 知识库增强对话：文档上传、分块、embedding 向量化、检索增强、降级兜底全链路已实现
-- 笔记自动索引 RAG：创建/更新时自动标记文档 ID，AI 对话中可检索到笔记内容
-- 流式补课包全链路验证通过：纯文本流式输出，段落换行完整保留
+- RAG 知识库增强对话：文档上传、分块、embedding、检索增强、降级兜底全链路已实现
+- 笔记自动索引 RAG：创建/更新时自动标记文档 ID
+- 流式输出全链路验证通过（curl 验证 `/ai/chat/stream`、`/rag/chat/stream`、`/ai/makeup/stream`）
+- 文档删除 `@Transactional` 修复验证通过
+- 补课包素材选择功能验证通过（选中笔记 ID 后 API 正确返回基于该笔记的学习建议）
+- PDF 提取改用 `pdftotext` 后支持大文件上传（测试通过 3.3MB PDF）
 
 注意：如果新窗口或新终端重启服务后 `configured=false`，通常是 `LANXIN_API_KEY` 没有传到 Java 进程，不是代码问题。
 
@@ -333,6 +339,10 @@ Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
 3. embedding 端点不可用时的持久化降级
    - vivo AIGC `/v1/embeddings` 返回 404，当前用关键词匹配兜底。
    - 后续如有可用的 embedding 模型，可恢复向量检索精度。
+
+4. 前端流式对话的参考来源显示
+   - 当前流式 `sendRagChat()` 暂未显示 RAG 参考来源（之前非流式版本有）。
+   - 后续可在流式响应结束后追加来源信息。
 
 ## 给新窗口的建议开场
 
