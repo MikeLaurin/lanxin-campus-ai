@@ -168,7 +168,13 @@ java -jar target/campus-ai-1.0.0.jar
 
 **推荐开发模式**：使用 `mvn spring-boot:run`，修改静态文件后无需重新打包即可生效。JVM 已配置 1GB 堆内存（`pom.xml` 中的 `spring-boot-maven-plugin` 配置）。
 
-**PDF 提取依赖**：RAG 需要系统安装 `pdftotext`（poppler-utils）。Windows 可下载 [poppler for Windows](http://blog.alivate.com.au/poppler-windows/)，将 `bin/` 加入 PATH。如未安装，PDF 上传会失败。
+**PDF 提取依赖**：RAG 需要系统安装 `pdftotext`（poppler-utils）。
+
+- **Windows**：Git for Windows 自带 `pdftotext.exe`（路径 `C:\Program Files\Git\mingw64\bin\`）。如果已安装 Git，直接用 Git Bash 启动 `mvn spring-boot:run`，PATH 自动包含该目录。如果从 PowerShell / IDE 终端启动，需手动将该路径加入系统环境变量 PATH，或单独下载 [poppler for Windows](http://blog.alivate.com.au/poppler-windows/)。
+- **Linux**：`sudo apt install poppler-utils`
+- **macOS**：`brew install poppler`
+
+如未安装，PDF 上传会报错 `Cannot run program "pdftotext": CreateProcess error=2`。
 
 **图片压缩**：上传前客户端会自动压缩（Canvas 缩放至 1920px，JPEG 质量 0.7）。手机照片通常 5-15MB，不压缩会超时。
 
