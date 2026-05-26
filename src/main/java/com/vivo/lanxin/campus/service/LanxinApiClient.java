@@ -19,6 +19,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 @Service
@@ -29,19 +30,22 @@ public class LanxinApiClient {
     private final String apiKey;
     private final String apiUrl;
     private final String model;
+    private final String embeddingModel;
 
     public LanxinApiClient(
             RestClient.Builder builder,
             ObjectMapper objectMapper,
             @Value("${lanxin.api-key:}") String apiKey,
             @Value("${lanxin.api-url:}") String apiUrl,
-            @Value("${lanxin.model:}") String model
+            @Value("${lanxin.model:}") String model,
+            @Value("${lanxin.embedding-model:}") String embeddingModel
     ) {
         this.restClient = builder.build();
         this.objectMapper = objectMapper;
         this.apiKey = apiKey == null ? "" : apiKey.trim();
         this.apiUrl = apiUrl == null ? "" : apiUrl.trim();
         this.model = model == null ? "" : model.trim();
+        this.embeddingModel = embeddingModel == null ? "" : embeddingModel.trim();
     }
 
     public boolean configured() {
@@ -55,7 +59,9 @@ public class LanxinApiClient {
                 "apiKeyLength", apiKey.length(),
                 "apiUrlPresent", !apiUrl.isBlank(),
                 "modelPresent", !model.isBlank(),
-                "model", model.isBlank() ? "not-set" : model
+                "model", model.isBlank() ? "not-set" : model,
+                "embeddingModelPresent", !embeddingModel.isBlank(),
+                "embeddingModel", embeddingModel.isBlank() ? "not-set" : embeddingModel
         );
     }
 
@@ -170,10 +176,12 @@ public class LanxinApiClient {
                     System.err.println("[LanxinApiClient] Stream error: " + e.getMessage());
                     latch.countDown();
                     return null;
-                });
+        });
 
         try {
-            latch.await();
+            if (!latch.await(60, TimeUnit.SECONDS)) {
+                System.err.println("[LanxinApiClient] Stream timed out after 60 seconds");
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
@@ -221,12 +229,12 @@ public class LanxinApiClient {
     }
 
     public Optional<float[]> embedding(String input) {
-        if (!configured()) {
+        if (apiKey.isBlank() || apiUrl.isBlank() || embeddingModel.isBlank()) {
             return Optional.empty();
         }
 
         Map<String, Object> request = Map.of(
-                "model", model,
+                "model", embeddingModel,
                 "input", input
         );
 

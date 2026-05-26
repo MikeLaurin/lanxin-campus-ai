@@ -186,6 +186,53 @@ h3 {
   line-height: 1.45;
 }
 
+.item-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.danger-action-button {
+  min-width: 56px;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  color: white;
+  background: var(--red);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.danger-action-button:disabled {
+  cursor: default;
+  opacity: .55;
+}
+
+.app-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 92px;
+  z-index: 1500;
+  max-width: min(340px, calc(100vw - 40px));
+  padding: 10px 14px;
+  border-radius: 8px;
+  color: white;
+  background: rgba(24, 32, 42, .92);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, .22);
+  font-size: 13px;
+  line-height: 1.4;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 12px);
+  transition: opacity .18s ease, transform .18s ease;
+}
+
+.app-toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
 .meta-row {
   display: flex;
   flex-wrap: wrap;
@@ -629,6 +676,44 @@ textarea {
   max-height: 220px;
   object-fit: contain;
   border-radius: 6px;
+  cursor: zoom-in;
+}
+
+.image-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: none;
+  place-items: center;
+  padding: 28px;
+  background: rgba(8, 15, 26, .78);
+}
+
+.image-lightbox.open {
+  display: grid;
+}
+
+.image-lightbox img {
+  max-width: min(92vw, 820px);
+  max-height: 86vh;
+  object-fit: contain;
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, .34);
+}
+
+.image-lightbox-close {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 8px;
+  color: white;
+  background: rgba(255, 255, 255, .16);
+  font-size: 28px;
+  line-height: 1;
 }
 
 /* ── Auth ──────────────────────────────── */

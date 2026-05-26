@@ -224,7 +224,7 @@ public class AppController {
     public List<Reminder> todayReminders(@RequestHeader("Authorization") String authHeader) {
         long userId = auth.getUserId(authHeader);
         LocalDate today = LocalDate.now();
-        return reminderRepo.findByUserIdAndCompletedFalseAndDueDateLessThanEqualOrderByDueDateAsc(userId, today.plusDays(1));
+        return reminderRepo.findByUserIdAndCompletedFalseAndDueDateLessThanEqualOrderByDueDateAsc(userId, today.plusDays(3));
     }
 
     @GetMapping("/reminders/priority")

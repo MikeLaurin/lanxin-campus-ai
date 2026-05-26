@@ -183,6 +183,14 @@ public class RagService {
         }
     }
 
+    private String serializeEmbedding(float[] embedding) {
+        try {
+            return objectMapper.writeValueAsString(embedding);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to serialize embedding", e);
+        }
+    }
+
     // ── Ingestion Pipeline ──────────────────────────────────
 
     public Document ingestDocument(long userId, String title, String originalFilename,
@@ -232,6 +240,8 @@ public class RagService {
                     chunk.setChunkIndex(j);
                     chunk.setContent(chunkText);
                     chunk.setCharCount(chunkText.length());
+                    lanxin.embedding(chunkText).ifPresent(embedding ->
+                            chunk.setEmbedding(serializeEmbedding(embedding)));
                     batch.add(chunk);
                 }
 
@@ -413,6 +423,8 @@ public class RagService {
             chunk.setChunkIndex(i);
             chunk.setContent(chunkText);
             chunk.setCharCount(chunkText.length());
+            lanxin.embedding(chunkText).ifPresent(embedding ->
+                    chunk.setEmbedding(serializeEmbedding(embedding)));
             chunkEntities.add(chunk);
         }
         chunkRepo.saveAll(chunkEntities);

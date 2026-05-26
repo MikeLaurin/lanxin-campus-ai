@@ -8,7 +8,10 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.LocalDate;
+
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
+import static org.hamcrest.Matchers.hasItem;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -82,5 +85,30 @@ class AppControllerTest {
         mockMvc.perform(get("/api/v1/notes")
                         .header("Authorization", auth()))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    void invalidNoteRequestReturnsBadRequest() throws Exception {
+        mockMvc.perform(post("/api/v1/notes")
+                        .header("Authorization", auth())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").exists());
+    }
+
+    @Test
+    void nearDeadlineReminderAppearsOnHome() throws Exception {
+        String dueDate = LocalDate.now().plusDays(3).toString();
+        mockMvc.perform(post("/api/v1/reminders")
+                        .header("Authorization", auth())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"three day task\",\"dueDate\":\"" + dueDate + "\",\"priority\":\"high\"}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/reminders/today")
+                        .header("Authorization", auth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].title", hasItem("three day task")));
     }
 }

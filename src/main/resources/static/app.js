@@ -22,9 +22,29 @@ async function api(path, options = {}) {
   }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || `API ${path} failed: ${response.status}`);
+    const error = new Error(body.error || `API ${path} failed: ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
-  return response.json();
+  if (response.status === 204) {
+    return null;
+  }
+  const text = await response.text();
+  return text ? JSON.parse(text) : null;
+}
+
+function showToast(message) {
+  let toast = $("#appToast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "appToast";
+    toast.className = "app-toast";
+    document.body.appendChild(toast);
+  }
+  toast.textContent = message;
+  toast.classList.add("show");
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => toast.classList.remove("show"), 2200);
 }
 
 // ── Auth ──────────────────────────────────────────────
@@ -136,7 +156,7 @@ function reminderItem(reminder) {
   `;
 }
 
-function noteItem(note) {
+function noteItem(note, showActions = false) {
   const tags = (note.tags || []).map((tag) => `<span class="tag">${tag}</span>`).join("");
   return `
     <article class="list-item">
@@ -147,6 +167,7 @@ function noteItem(note) {
         ${note.offlineCreated ? '<span class="tag low">离线创建</span>' : ""}
         ${tags}
       </div>
+      ${showActions ? `<div class="item-actions"><button class="danger-action-button" data-delete-note="${note.id}">删除</button></div>` : ""}
     </article>
   `;
 }
@@ -167,7 +188,46 @@ async function loadDashboard() {
 async function loadNotes() {
   const keyword = $("#noteSearch").value.trim();
   const notes = await api(`/api/v1/notes${keyword ? `?keyword=${encodeURIComponent(keyword)}` : ""}`);
-  $("#noteList").innerHTML = notes.length ? notes.map(noteItem).join("") : empty("没有找到匹配笔记");
+  $("#noteList").innerHTML = notes.length ? notes.map(note => noteItem(note, true)).join("") : empty("没有找到匹配笔记");
+  $$("[data-delete-note]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      await deleteNote(btn.dataset.deleteNote, btn);
+    });
+  });
+}
+
+async function deleteNote(id, button) {
+  if (button.dataset.confirming !== "true") {
+    button.dataset.confirming = "true";
+    button.textContent = "确认删除";
+    clearTimeout(button.confirmTimer);
+    button.confirmTimer = setTimeout(() => {
+      button.dataset.confirming = "";
+      button.textContent = "删除";
+    }, 3000);
+    return;
+  }
+
+  clearTimeout(button.confirmTimer);
+  button.disabled = true;
+  const oldText = button.textContent;
+  button.textContent = "删除中";
+  try {
+    await api(`/api/v1/notes/${id}`, { method: "DELETE" });
+    showToast("笔记已删除");
+    await Promise.all([loadNotes(), loadDashboard()]);
+  } catch (err) {
+    if (err.status === 404) {
+      button.closest(".list-item")?.remove();
+      showToast("这条笔记已不存在，列表已刷新");
+      await Promise.all([loadNotes(), loadDashboard()]);
+      return;
+    }
+    showToast("删除失败：" + err.message);
+    button.disabled = false;
+    button.dataset.confirming = "";
+    button.textContent = oldText;
+  }
 }
 
 async function loadTasks(priority = false) {
@@ -427,7 +487,7 @@ async function loadMakeup() {
       const { done, value } = await reader.read();
       if (done) break;
       fullText += decoder.decode(value, { stream: true });
-      $("#makeupStream").innerHTML = fullText.replace(/\n/g, "<br>");
+      $("#makeupStream").innerHTML = escapeHtml(fullText);
     }
   } catch (err) {
     box.innerHTML = "<strong>补课包生成失败</strong><br>" + err.message;
@@ -516,8 +576,23 @@ function resetImageSelection() {
   $("#imagePreview").style.display = "none";
   $("#uploadPlaceholder").style.display = "";
   $("#uploadArea").classList.remove("has-image");
+  closeImageLightbox();
   $("#processImage").innerHTML = '<span class="spark-icon"></span>AI 识别照片';
   $("#processImage").disabled = false;
+}
+
+function openImageLightbox() {
+  const preview = $("#imagePreview");
+  if (!preview.src || preview.style.display === "none") return;
+  $("#imageLightboxImg").src = preview.src;
+  $("#imageLightbox").classList.add("open");
+  $("#imageLightbox").setAttribute("aria-hidden", "false");
+}
+
+function closeImageLightbox() {
+  $("#imageLightbox").classList.remove("open");
+  $("#imageLightbox").setAttribute("aria-hidden", "true");
+  $("#imageLightboxImg").src = "";
 }
 
 async function processImage() {
@@ -553,6 +628,7 @@ async function processImage() {
     $("#imagePreview").style.display = "none";
     $("#uploadPlaceholder").style.display = "";
     $("#uploadArea").classList.remove("has-image");
+    closeImageLightbox();
   } catch (error) {
     if (myId !== imageRequestId) return;
     console.error(error);
@@ -612,7 +688,10 @@ function bindEvents() {
   // Chat
   $("#sendChat").addEventListener("click", sendRagChat);
   $("#chatInput").addEventListener("keydown", (event) => {
-    if (event.key === "Enter") sendRagChat();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      sendRagChat();
+    }
   });
 
   // RAG document upload
@@ -650,7 +729,18 @@ function bindEvents() {
   // Image upload
   $("#uploadArea").addEventListener("click", () => {
     if (imageProcessing) return;
+    if (selectedImageFile) return;
     $("#imageFile").click();
+  });
+  $("#imagePreview").addEventListener("click", (event) => {
+    event.stopPropagation();
+    openImageLightbox();
+  });
+  $("#imageLightbox").addEventListener("click", closeImageLightbox);
+  $("#imageLightboxImg").addEventListener("click", (event) => event.stopPropagation());
+  $("#closeImageLightbox").addEventListener("click", closeImageLightbox);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeImageLightbox();
   });
   $("#imageFile").addEventListener("change", (event) => {
     if (event.target.files && event.target.files[0]) handleImageSelect(event.target.files[0]);

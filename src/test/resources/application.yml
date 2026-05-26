@@ -14,3 +14,4 @@ lanxin:
   api-key: ""
   api-url: https://api-ai.vivo.com.cn/v1
   model: Doubao-Seed-2.0-mini
+  embedding-model: ""
