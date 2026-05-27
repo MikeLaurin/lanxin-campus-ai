@@ -121,6 +121,7 @@ public class LanxinApiClient {
                 "model", model,
                 "stream", true,
                 "temperature", 0.3,
+                "max_tokens", 4096,
                 "thinking", Map.of("type", "disabled"),
                 "messages", List.of(
                         Map.of("role", "system", "content", systemPrompt),
@@ -139,7 +140,7 @@ public class LanxinApiClient {
                 .uri(URI.create(chatCompletionsUrl()))
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
                 .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-                .timeout(java.time.Duration.ofSeconds(60))
+                .timeout(java.time.Duration.ofSeconds(120))
                 .POST(HttpRequest.BodyPublishers.ofString(json))
                 .build();
 

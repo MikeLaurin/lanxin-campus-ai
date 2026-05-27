@@ -375,14 +375,38 @@ function escapeHtml(text) {
   return String(text ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/\n/g, "<br>");
+    .replace(/>/g, "&gt;");
+}
+
+function renderMarkdown(text) {
+  let html = escapeHtml(text);
+  // Headers
+  html = html.replace(/^### (.+)$/gm, "<h3>$1</h3>");
+  html = html.replace(/^## (.+)$/gm, "<h2>$1</h2>");
+  html = html.replace(/^# (.+)$/gm, "<h1>$1</h1>");
+  // Bold
+  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  // Horizontal rules
+  html = html.replace(/^---$/gm, "<hr>");
+  // Unordered lists
+  html = html.replace(/^- (.+)$/gm, "<li>$1</li>");
+  html = html.replace(/(<li>.*<\/li>)/s, "<ul>$1</ul>");
+  // Ordered lists
+  html = html.replace(/^\d+\.\s+(.+)$/gm, "<li>$1</li>");
+  // Paragraphs: double newline
+  html = html.replace(/\n\n+/g, "</p><p>");
+  html = "<p>" + html + "</p>";
+  // Clean empty paragraphs
+  html = html.replace(/<p><\/p>/g, "");
+  // Single newlines to <br>
+  html = html.replace(/\n/g, "<br>");
+  return html;
 }
 
 function appendMessage(role, content) {
   const node = document.createElement("div");
   node.className = `message ${role}`;
-  node.innerHTML = escapeHtml(content);
+  node.innerHTML = role === "assistant" ? renderMarkdown(content) : escapeHtml(content).replace(/\n/g, "<br>");
   $("#chatBox").appendChild(node);
   $("#chatBox").scrollTop = $("#chatBox").scrollHeight;
 }
@@ -617,6 +641,8 @@ async function loadMakeup() {
       fullText += decoder.decode(value, { stream: true });
       $("#makeupStream").innerHTML = escapeHtml(fullText);
     }
+    // 流完成，替换掉"生成中..."
+    box.innerHTML = renderMarkdown(fullText);
   } catch (err) {
     box.innerHTML = "<strong>补课包生成失败</strong><br>" + err.message;
     } finally {

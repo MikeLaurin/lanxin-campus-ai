@@ -324,12 +324,11 @@ public class AiMockService {
         final String userPrompt;
 
         if (hasSources) {
-            systemPrompt = "你是一个学习助手。请根据以下笔记/文档内容，生成个性化补课建议，"
-                    + "包括知识点要点、复习重点和自测题目。要紧密结合内容中实际出现的知识点。用Markdown格式输出。";
-            userPrompt = contextBuilder.toString() + "请根据以上内容生成补课建议。";
+            systemPrompt = "你是一个学习助手，请根据笔记/文档内容生成一份详细的个性化补课建议。要求：【知识点要点】至少列出5个，每个要点包含(1)核心概念解释(2)与材料的关联(3)常见误区；【复习重点】至少3个，每个说明具体复习方法、推荐时间分配和验收标准；【自测题目】至少5道，包含简答题和选择题各半，每道题附答案和解析。用Markdown格式输出，确保每个部分内容充实。";
+            userPrompt = contextBuilder.toString() + "请根据以上内容生成详细的补课建议。";
         } else {
-            systemPrompt = "你是一个学习助手。请生成通用学科学习建议，包括知识点要点、复习方法和自测方向。用Markdown格式输出。";
-            userPrompt = "请生成通用学习建议，涵盖笔记整理方法、复习策略和自测技巧。";
+            systemPrompt = "你是一个学习助手。请生成一份详细的通用学科学习建议，要求：【知识点要点】至少5个典型知识点，每个包含解释和学习建议；【复习方法】至少3个具体方法，说明适用场景和操作步骤；【自测方向】至少5道自测题，含答案和解析。用Markdown格式输出，每个部分内容充实。";
+            userPrompt = "请生成详细的通用学习建议，涵盖笔记整理方法、复习策略和自测技巧。";
         }
 
         final String finalSystemPrompt = systemPrompt;

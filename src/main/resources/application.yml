@@ -5,6 +5,9 @@ server:
 spring:
   application:
     name: lanxin-campus-ai
+  mvc:
+    async:
+      request-timeout: 180000
   datasource:
     url: jdbc:h2:file:./data/campus-ai;DB_CLOSE_DELAY=-1;MODE=MYSQL
     username: sa
