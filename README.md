@@ -82,7 +82,9 @@ java -jar target/campus-ai-1.0.0.jar
 - 笔记自动索引：笔记创建/更新后自动写入 RAG 知识库
 - 逃课补课包：可勾选笔记/文档作为素材，流式生成学习建议
 - 学习周报：汇总笔记和 DDL 完成情况
-- 前端体验：等待服务端响应时显示 loading，禁用重复点击
+- 前端 Markdown 渲染：AI 生成的 #标题、**加粗**、列表等 Markdown 语法自动转为 HTML
+- 补课包输出增强：prompt 要求详细的知识点解析、复习方法、自测题目及答案解析
+- 前端体验：等待服务端响应时显示 loading，禁用重复点击，流式完成后自动移除状态提示
 - 接口输出：使用 `NoteDto`、`ReminderDto` 等 DTO，不直接暴露 JPA 实体内部字段
 
 ## 安全与稳定性
@@ -233,6 +235,7 @@ mvn test
 - 使用 `java -jar` 运行时，静态资源来自 jar 包内部，改动前端后需要重新 `mvn clean package`。
 - 生产环境必须设置强随机 `APP_JWT_SECRET`，不要使用默认开发密钥。
 - `application.yml` 中 `spring.jpa.hibernate.ddl-auto=update` 适合演示环境，正式环境应改为迁移脚本管理表结构。
+- `spring.mvc.async.request-timeout` 默认 30s，流式长内容场景需调大（当前 180s）。
 - 如后续引入 Redis，可替换当前内存限流桶和本地用户信息缓存。
 
 更多接手细节见 [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md)。

@@ -298,6 +298,9 @@ Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
 - 不要把真实 `LANXIN_API_KEY`、`APP_JWT_SECRET` 写入仓库。
 - 现有 JWT 没有服务端吊销机制，适合 MVP。正式上线需设计 token blacklist、用户 token version 或短 access token + Redis session。
 - 当前 IP 限流读取 `X-Forwarded-For` 的第一个 IP。部署在反向代理后要确保代理层正确覆盖该头，避免伪造。
+- `spring.mvc.async.request-timeout: 180000`（默认 30s 不足以支持流式长内容）
+- 补课包 prompt 已优化，要求详细的知识点解析（含概念解释、误区）、复习方法（含时间分配、验收标准）、自测题目（含答案解析）
+- 前端已支持 Markdown 渲染（`renderMarkdown()` 函数），处理 #标题、**加粗**、列表等语法
 - 前端是浏览器演示页，后续迁移 vivo 快应用时，主要复用后端 API 和业务流程。
 
 ## 当前验证记录
@@ -306,6 +309,7 @@ Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
 
 - `mvn test`：9 个集成测试全部通过
 - `node --check src/main/resources/static/app.js`：通过
+- 补课包详细输出 + Markdown 渲染 + 流式超时修复全链路验证通过
 
 测试覆盖：
 
