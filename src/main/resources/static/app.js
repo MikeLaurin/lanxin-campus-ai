@@ -107,6 +107,58 @@ function showToast(message) {
   showToast.timer = setTimeout(() => toast.classList.remove("show"), 2200);
 }
 
+// ── Ripple effect ───────────────────────────────────────
+
+function addRipple(e) {
+  const btn = e.currentTarget;
+  const rect = btn.getBoundingClientRect();
+  const size = Math.max(rect.width, rect.height);
+  const ripple = document.createElement("span");
+  ripple.className = "ripple";
+  ripple.style.width = ripple.style.height = size + "px";
+  ripple.style.left = (e.clientX - rect.left - size / 2) + "px";
+  ripple.style.top = (e.clientY - rect.top - size / 2) + "px";
+  btn.appendChild(ripple);
+  ripple.addEventListener("animationend", () => ripple.remove());
+}
+
+// ── Counter animation ───────────────────────────────────
+
+function animateCounter(el, target, suffix) {
+  const duration = 700;
+  const startVal = 0;
+  const startTime = performance.now();
+
+  function update(now) {
+    const elapsed = now - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    const val = Math.round(startVal + (target - startVal) * eased);
+    el.textContent = suffix ? val + suffix : val;
+    if (progress < 1) {
+      requestAnimationFrame(update);
+    }
+  }
+  requestAnimationFrame(update);
+}
+
+// ── Typing indicator ────────────────────────────────────
+
+function showTyping() {
+  hideTyping();
+  const dots = document.createElement("div");
+  dots.className = "typing-dots";
+  dots.id = "typingIndicator";
+  dots.innerHTML = "<span></span><span></span><span></span>";
+  $("#chatBox").appendChild(dots);
+  $("#chatBox").scrollTop = $("#chatBox").scrollHeight;
+}
+
+function hideTyping() {
+  const dots = $("#typingIndicator");
+  if (dots) dots.remove();
+}
+
 // ── Auth ──────────────────────────────────────────────
 
 function showAuth() {
@@ -204,10 +256,24 @@ function priorityLabel(priority) {
 
 function renderStats(data) {
   $("#statsGrid").innerHTML = [
-    ["笔记", data.noteCount],
-    ["待办", data.openReminderCount],
-    ["连续学习", `${data.studyDays}天`]
-  ].map(([label, value]) => `<div class="stat"><strong>${value}</strong><span>${label}</span></div>`).join("");
+    ["笔记", data.noteCount, ""],
+    ["待办", data.openReminderCount, ""],
+    ["连续学习", data.studyDays, "天"]
+  ].map(([label, value, suffix]) =>
+    `<div class="stat"><strong class="count-target">${value}${suffix}</strong><span>${label}</span></div>`
+  ).join("");
+
+  // Animate counters
+  setTimeout(() => {
+    const items = [
+      { el: $$(".stat .count-target")[0], val: data.noteCount, s: "" },
+      { el: $$(".stat .count-target")[1], val: data.openReminderCount, s: "" },
+      { el: $$(".stat .count-target")[2], val: data.studyDays, s: "天" }
+    ];
+    items.forEach(({ el, val, s }) => {
+      if (el) animateCounter(el, val, s);
+    });
+  }, 100);
 }
 
 function reminderItem(reminder) {
@@ -424,6 +490,7 @@ async function sendRagChat() {
   state.pending.add("chat");
 
   appendMessage("user", message);
+  showTyping();
 
   const useRag = $("#ragToggle").checked;
   const endpoint = useRag ? "/api/v1/rag/chat/stream" : "/api/v1/ai/chat/stream";
@@ -454,6 +521,7 @@ async function sendRagChat() {
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
+    hideTyping();
 
     const msgDiv = document.createElement("div");
     msgDiv.className = "message assistant";
@@ -467,9 +535,13 @@ async function sendRagChat() {
       msgDiv.innerHTML = escapeHtml(fullText);
       $("#chatBox").scrollTop = $("#chatBox").scrollHeight;
     }
+    msgDiv.innerHTML = renderMarkdown(fullText);
+    $("#chatBox").scrollTop = $("#chatBox").scrollHeight;
   } catch (err) {
+    hideTyping();
     appendMessage("assistant", "抱歉，回复失败: " + err.message);
   } finally {
+    hideTyping();
     state.pending.delete("chat");
     input.disabled = false;
     button.disabled = false;
@@ -803,6 +875,14 @@ async function processImage() {
 // ── Event binding ─────────────────────────────────────
 
 function bindEvents() {
+  // Ripple effect on all buttons
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest("button");
+    if (btn && !btn.classList.contains("ripple-none")) {
+      addRipple(e);
+    }
+  });
+
   // Auth
   $("#loginForm").addEventListener("submit", handleLogin);
   $("#registerForm").addEventListener("submit", handleRegister);

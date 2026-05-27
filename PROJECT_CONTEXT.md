@@ -203,6 +203,9 @@ src/test/resources/application.yml
 - 普通 API 请求遇到 401 会先尝试 refresh token
 - 流式聊天 401 刷新后提示用户重新发送，避免重复提交消息
 - 文档上传区域 loading 时禁用交互
+- UI 采用 "温暖学伴" 设计风格：浮动光斑背景、流动渐变 Hero、毛玻璃面板、emoji 图标
+- 18+ CSS 动画：弹簧过渡、波纹反馈、呼吸发光、弹跳导航、打字指示器
+- JS 微交互：按钮水波纹、统计数字滚动动画、AI 回复等待指示器
 
 ## RAG 流程
 
@@ -302,6 +305,8 @@ Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
 - 补课包 prompt 已优化，要求详细的知识点解析（含概念解释、误区）、复习方法（含时间分配、验收标准）、自测题目（含答案解析）
 - 前端已支持 Markdown 渲染（`renderMarkdown()` 函数），处理 #标题、**加粗**、列表等语法
 - 前端是浏览器演示页，后续迁移 vivo 快应用时，主要复用后端 API 和业务流程。
+- 前端图标使用 emoji（🏠📸📝⏰✨📊），新增图标时直接用 emoji，不再手写 CSS 图标类。
+- 按钮波纹效果（`addRipple()`）、统计数字滚动（`animateCounter()`）、打字指示器（`showTyping()/hideTyping()`）已实现在 app.js 中。
 
 ## 当前验证记录
 
@@ -310,6 +315,7 @@ Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
 - `mvn test`：9 个集成测试全部通过
 - `node --check src/main/resources/static/app.js`：通过
 - 补课包详细输出 + Markdown 渲染 + 流式超时修复全链路验证通过
+- UI v3 动效升级：浮动光斑、流动渐变、弹簧动画、波纹反馈、数字滚动、打字指示器全链路验证通过
 
 测试覆盖：
 

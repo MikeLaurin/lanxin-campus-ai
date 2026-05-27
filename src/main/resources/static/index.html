@@ -7,6 +7,11 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+  <!-- Floating orbs -->
+  <div class="orb orb-1" aria-hidden="true"></div>
+  <div class="orb orb-2" aria-hidden="true"></div>
+  <div class="orb orb-3" aria-hidden="true"></div>
+
   <!-- Auth overlay -->
   <div class="auth-overlay" id="authOverlay">
     <div class="auth-card">
@@ -61,12 +66,10 @@
         </div>
         <div class="quick-actions">
           <button class="primary-action" data-nav="capture">
-            <span class="camera-icon"></span>
-            拍照笔记
+            📸 拍照笔记
           </button>
           <button class="secondary-action" data-nav="tasks">
-            <span class="clock-icon"></span>
-            DDL 管理
+            ⏰ DDL 管理
           </button>
         </div>
         <section class="section-block">
@@ -93,7 +96,7 @@
           </div>
           <div class="upload-area" id="uploadArea">
             <div class="upload-placeholder" id="uploadPlaceholder">
-              <span class="camera-icon" style="font-size:36px;"></span>
+              <span style="font-size:36px;">📸</span>
               <p>点击选择或拖拽课堂照片</p>
               <p class="eyebrow">支持板书、PPT、课本页面</p>
             </div>
@@ -177,7 +180,7 @@
         </section>
         <section class="section-block">
           <div class="section-head">
-            <h2>小蓝 AI 互动</h2>
+            <h2>✨ 小蓝 AI 互动</h2>
             <span class="status-pill">学习搭子</span>
           </div>
           <div class="chat-box" id="chatBox"></div>
@@ -188,7 +191,7 @@
             </button>
           </div>
           <div style="display:flex;align-items:center;gap:6px;margin-top:10px;">
-            <input type="checkbox" id="ragToggle" checked style="accent-color:var(--blue);width:16px;height:16px;">
+            <input type="checkbox" id="ragToggle" checked style="accent-color:var(--primary);width:16px;height:16px;">
             <label for="ragToggle" style="font-size:13px;color:var(--muted);">基于知识库回答</label>
           </div>
         </section>
@@ -219,18 +222,18 @@
     </section>
 
     <nav class="bottom-nav" aria-label="主导航">
-      <button class="active" data-nav="home"><span class="home-icon"></span><small>首页</small></button>
-      <button data-nav="capture"><span class="camera-icon"></span><small>拍照</small></button>
-      <button data-nav="notes"><span class="note-icon"></span><small>笔记</small></button>
-      <button data-nav="tasks"><span class="clock-icon"></span><small>DDL</small></button>
-      <button data-nav="ai"><span class="chat-icon"></span><small>小蓝</small></button>
-      <button data-nav="report"><span class="chart-icon"></span><small>周报</small></button>
+      <button class="active" data-nav="home"><span>🏠</span><small>首页</small></button>
+      <button data-nav="capture"><span>📸</span><small>拍照</small></button>
+      <button data-nav="notes"><span>📝</span><small>笔记</small></button>
+      <button data-nav="tasks"><span>⏰</span><small>DDL</small></button>
+      <button data-nav="ai"><span>✨</span><small>小蓝</small></button>
+      <button data-nav="report"><span>📊</span><small>周报</small></button>
     </nav>
   </main>
   <div class="image-lightbox" id="imageLightbox" aria-hidden="true">
     <button class="image-lightbox-close" id="closeImageLightbox" aria-label="Close preview">&times;</button>
     <img id="imageLightboxImg" alt="Preview">
   </div>
-  <script src="/app.js?v=11"></script>
+  <script src="/app.js?v=13"></script>
 </body>
 </html>

@@ -43,7 +43,7 @@ mvn spring-boot:run
 ```
 
 浏览器访问：
-
+ 
 ```text
 http://localhost:8080
 ```
@@ -65,7 +65,7 @@ java -jar target/campus-ai-1.0.0.jar
 
 - 后端：Spring Boot 3.4.1、Java 17、Spring Web、Spring Data JPA、Bean Validation
 - 数据库：H2 文件数据库，兼容 MySQL 模式
-- 前端：原生 HTML/CSS/JavaScript，静态资源托管在 `src/main/resources/static`
+- 前端：原生 HTML/CSS/JavaScript，静态资源托管在 `src/main/resources/static`，"温暖学伴"设计风格，18+ CSS 动画 + JS 微交互
 - 认证：BCrypt 密码加密 + HMAC-SHA256 JWT access token + refresh token
 - AI：vivo AIGC OpenAI 兼容接口，支持文本、图片、多轮场景封装和流式输出
 - RAG：PDF/TXT 文档解析、分块、embedding 向量检索、关键词检索降级
@@ -86,6 +86,7 @@ java -jar target/campus-ai-1.0.0.jar
 - 补课包输出增强：prompt 要求详细的知识点解析、复习方法、自测题目及答案解析
 - 前端体验：等待服务端响应时显示 loading，禁用重复点击，流式完成后自动移除状态提示
 - 接口输出：使用 `NoteDto`、`ReminderDto` 等 DTO，不直接暴露 JPA 实体内部字段
+- UI 动效升级：浮动光斑背景、流动渐变 Hero、弹簧动画、按钮波纹反馈、数字滚动统计、打字指示器、毛玻璃面板
 
 ## 安全与稳定性
 
@@ -233,6 +234,7 @@ mvn test
 
 - 开发时推荐 `mvn spring-boot:run`，修改静态文件后刷新浏览器即可。
 - 使用 `java -jar` 运行时，静态资源来自 jar 包内部，改动前端后需要重新 `mvn clean package`。
+- 前端采用 emoji 图标 + CSS 动画方案，新增图标时使用 emoji 而非 CSS 手绘形状。
 - 生产环境必须设置强随机 `APP_JWT_SECRET`，不要使用默认开发密钥。
 - `application.yml` 中 `spring.jpa.hibernate.ddl-auto=update` 适合演示环境，正式环境应改为迁移脚本管理表结构。
 - `spring.mvc.async.request-timeout` 默认 30s，流式长内容场景需调大（当前 180s）。
