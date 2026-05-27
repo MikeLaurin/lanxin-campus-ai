@@ -1,183 +1,238 @@
 # 蓝心校园 AI 管家 MVP
 
-根据[竞赛方案](COMPETITION_PROPOSAL.md)实现的可运行演示项目。Spring Boot 3.4.1 + H2 文件数据库 + 原生前端，每个用户独立账号，数据持久化存储。
-
-## 前置条件
-
-在本机开发需要安装：
-
-- **JDK 17+**（项目编译目标为 Java 17）
-- **Maven 3.6+**（或使用项目自带的 `mvnw`）
-
-> 无需安装 MySQL。项目使用 H2 文件数据库，数据文件存储在 `./data/` 目录下，首次启动自动创建。
+面向校园学习场景的 AI 管家演示项目，根据 [竞赛方案](COMPETITION_PROPOSAL.md) 实现。项目采用 Spring Boot + H2 文件数据库 + 原生前端，支持用户账号、课堂笔记、DDL 管理、AI 对话、RAG 知识库、补课包和学习周报。
 
 ## 快速开始
 
-### 1. 配置环境变量
+### 环境要求
 
-vivo AIGC API Key 通过环境变量注入，不写入代码或配置文件：
+- JDK 17+
+- Maven 3.6+
+- 可选：`pdftotext`，用于 PDF 文档解析
 
-```bash
-# Linux / macOS
-export LANXIN_API_KEY="你的蓝心 API Key"
-export LANXIN_API_URL="https://api-ai.vivo.com.cn/v1"
-export LANXIN_MODEL="Doubao-Seed-2.0-mini"
+项目默认使用 H2 文件数据库，数据保存在 `./data/`，首次启动自动创建，无需安装 MySQL。
 
-# Windows PowerShell
+### 配置环境变量
+
+AI API Key 通过环境变量注入，不写入代码或配置文件：
+
+```powershell
 $env:LANXIN_API_KEY="你的蓝心 API Key"
 $env:LANXIN_API_URL="https://api-ai.vivo.com.cn/v1"
 $env:LANXIN_MODEL="Doubao-Seed-2.0-mini"
+$env:LANXIN_EMBEDDING_MODEL=""
+$env:APP_JWT_SECRET="请替换为生产环境强随机密钥"
 ```
 
-如未配置 API Key，AI 功能会自动降级到本地 mock，不影响其他功能。
-
-### 2. 启动应用
+Linux/macOS：
 
 ```bash
-# 开发模式（推荐）
-mvn spring-boot:run
+export LANXIN_API_KEY="你的蓝心 API Key"
+export LANXIN_API_URL="https://api-ai.vivo.com.cn/v1"
+export LANXIN_MODEL="Doubao-Seed-2.0-mini"
+export LANXIN_EMBEDDING_MODEL=""
+export APP_JWT_SECRET="请替换为生产环境强随机密钥"
+```
 
-# 或打包运行
+未配置 `LANXIN_API_KEY` 时，部分 AI 功能会使用本地演示内容或降级能力，基础业务仍可运行。
+
+### 启动
+
+```bash
+mvn spring-boot:run
+```
+
+浏览器访问：
+
+```text
+http://localhost:8080
+```
+
+演示账号：
+
+```text
+demo / demo123
+```
+
+也可以打包运行：
+
+```bash
 mvn clean package -DskipTests
 java -jar target/campus-ai-1.0.0.jar
 ```
 
-### 3. 打开浏览器
-
-```
-
-
-http://localhost:8080
-```
-
-演示账号：`demo` / `demo123`
-
-### H2 数据库控制台
-
-开发时可访问 `http://localhost:8080/h2-console` 查看数据：
-- JDBC URL: `jdbc:h2:file:./data/campus-ai`
-- 用户名: `sa`，密码留空
-
 ## 技术栈
 
-- 后端：Spring Boot 3.4.1 + Spring Data JPA，Java 21
-- 数据库：H2 文件数据库（数据文件 `./data/campus-ai.mv.db`）
-- 前端：HTML + CSS + JavaScript（托管在 `src/main/resources/static/`）
-- 认证：BCrypt 密码加密 + Token 令牌（服务端 ConcurrentHashMap）
-- AI：vivo AIGC OpenAI 兼容接口（失败自动降级 mock）
-- RAG：PDF/TXT 上传 → `pdftotext` 提取文本 → 分块(1000字+200重叠) → embedding 向量化 → 余弦相似度检索 → 增强对话；embedding 不可用时自动降级关键词匹配
-- 流式输出：Spring `StreamingResponseBody` + 前端 `ReadableStream` API，纯文本逐字渲染
-
-## 项目结构
-
-```
-lanxin-campus-ai/
-├── pom.xml
-├── src/
-│   ├── main/
-│   │   ├── java/com/vivo/lanxin/campus/
-│   │   │   ├── CampusAiApplication.java      # 入口
-│   │   │   ├── config/                         # 配置类
-│   │   │   ├── model/                          # JPA 实体
-│   │   │   ├── repository/                     # 数据访问层
-│   │   │   ├── service/                        # 业务层（Auth, AI, RAG）
-│   │   │   └── web/                            # Controller + 异常处理
-│   │   └── resources/
-│   │       ├── application.yml                 # 主配置
-│   │       └── static/                         # 前端页面
-│   └── test/
-│       ├── java/.../AppControllerTest.java     # 5 个集成测试
-│       └── resources/application.yml           # 测试用 H2 配置
-├── PROJECT_CONTEXT.md                          # 详细开发上下文
-└── COMPETITION_PROPOSAL.md                     # 原始竞赛方案
-```
+- 后端：Spring Boot 3.4.1、Java 17、Spring Web、Spring Data JPA、Bean Validation
+- 数据库：H2 文件数据库，兼容 MySQL 模式
+- 前端：原生 HTML/CSS/JavaScript，静态资源托管在 `src/main/resources/static`
+- 认证：BCrypt 密码加密 + HMAC-SHA256 JWT access token + refresh token
+- AI：vivo AIGC OpenAI 兼容接口，支持文本、图片、多轮场景封装和流式输出
+- RAG：PDF/TXT 文档解析、分块、embedding 向量检索、关键词检索降级
+- 安全：统一异常响应、参数校验、输入清洗、敏感接口 IP 速率限制、DTO 输出隔离
 
 ## 已实现功能
 
-- 用户注册/登录（BCrypt 加密，Token 鉴权，数据隔离）
-- 课堂多模态智能笔记：真实图片上传（点击/拖拽），AI 识别板书/PPT，结构化整理
-- DDL 智能管理：从文本解析课程、截止日期、优先级
-- AI 学习搭子：流式对话，不限话题，自动引用用户笔记知识库
-- RAG 知识库增强对话：上传 PDF/TXT 参考资料后，AI 基于文档内容流式回答
-- 笔记自动入 RAG：创建/更新笔记时自动索引，AI 对话和补课包均可检索到
-- 逃课补课包：勾选笔记/文档作为素材，流式生成个性化学习建议
-- 学习周报：笔记、DDL 完成情况、鼓励式反馈
-- 首页仪表盘：统计看板、今日待办、最近笔记
-- 模型思考模式已禁用：避免推理过程混入输出文本
-- 所有 AI 交互均已支持流式输出（聊天、RAG 问答、补课包）
+- 用户注册、登录、刷新令牌、退出
+- 首页仪表盘：笔记数、待办数、连续学习天数、今日 DDL、最近笔记
+- 课堂笔记：文本结构化、图片识别、笔记归档、搜索、删除
+- DDL 管理：手动创建、AI 文本解析、临近任务、优先级排序
+- AI 对话：普通对话和 RAG 增强对话，支持流式输出
+- RAG 知识库：上传 PDF/TXT，生成文档切片，支持文档列表和删除
+- 笔记自动索引：笔记创建/更新后自动写入 RAG 知识库
+- 逃课补课包：可勾选笔记/文档作为素材，流式生成学习建议
+- 学习周报：汇总笔记和 DDL 完成情况
+- 前端体验：等待服务端响应时显示 loading，禁用重复点击
+- 接口输出：使用 `NoteDto`、`ReminderDto` 等 DTO，不直接暴露 JPA 实体内部字段
+
+## 安全与稳定性
+
+- `GlobalExceptionHandler` 统一返回错误结构：
+
+```json
+{
+  "timestamp": "2026-05-27T00:00:00Z",
+  "status": 503,
+  "code": "AI_SERVICE_UNAVAILABLE",
+  "error": "AI 服务调用失败，状态码：503",
+  "provider": "lanxin",
+  "aiStatus": 503
+}
+```
+
+- `LanxinApiClient` 对 AI HTTP 状态码、网络异常、超时、流式调用失败进行明确提示。
+- 登录、注册、AI 生成、RAG 对话等敏感 `POST` 接口有 IP 速率限制。
+- 请求体使用 Bean Validation 校验长度、必填字段、优先级枚举等。
+- 用户输入经过基础清洗，去除脚本标签、HTML 标签和非法控制字符。
+- 前端渲染动态内容前做 HTML 转义，降低 XSS 风险。
+- 数据库为高频查询字段添加索引，例如 `userId + updatedAt`、`userId + dueDate`、`userId + status`。
 
 ## 主要接口
 
+除登录、注册、刷新令牌外，业务接口需要：
+
+```http
+Authorization: Bearer <accessToken>
+```
+
 ### 认证
-- `POST /api/v1/user/login` — 登录
-- `POST /api/v1/user/register` — 注册
-- `POST /api/v1/user/logout` — 退出
-- `GET /api/v1/user/profile` — 用户信息
+
+- `POST /api/v1/user/login`
+- `POST /api/v1/user/register`
+- `POST /api/v1/user/refresh`
+- `POST /api/v1/user/logout`
+- `GET /api/v1/user/profile`
 
 ### 笔记
-- `GET /api/v1/notes` — 笔记列表
-- `POST /api/v1/notes` — 创建笔记
-- `GET /api/v1/notes/{id}` — 笔记详情
-- `PUT /api/v1/notes/{id}` — 更新笔记
-- `DELETE /api/v1/notes/{id}` — 删除笔记
-- `POST /api/v1/ai/note/process` — AI 结构化笔记
-- `POST /api/v1/ai/note/process-image` — AI 拍照识别（multipart, `file` 字段）
+
+- `GET /api/v1/notes`
+- `POST /api/v1/notes`
+- `GET /api/v1/notes/{id}`
+- `PUT /api/v1/notes/{id}`
+- `DELETE /api/v1/notes/{id}`
+- `POST /api/v1/notes/{id}/mindmap`
+- `POST /api/v1/notes/batch-sync`
+- `POST /api/v1/ai/note/process`
+- `POST /api/v1/ai/note/process-image`
+- `POST /api/v1/ai/note/mindmap`
 
 ### DDL
-- `GET /api/v1/reminders` — DDL 列表
-- `POST /api/v1/reminders` — 创建 DDL
-- `GET /api/v1/reminders/today` — 今日待办
-- `GET /api/v1/reminders/priority` — 优先级排序
-- `POST /api/v1/reminders/parse` — AI 解析 DDL
-- `PUT /api/v1/reminders/{id}/complete` — 完成 DDL
 
-### RAG 知识库
-- `POST /api/v1/rag/documents` — 上传文档（PDF/TXT，multipart）
-- `GET /api/v1/rag/documents` — 文档列表
-- `DELETE /api/v1/rag/documents/{id}` — 删除文档
-- `POST /api/v1/rag/chat` — RAG 增强对话（一次性返回）
-- `POST /api/v1/rag/chat/stream` — RAG 增强对话（流式输出）
+- `GET /api/v1/reminders`
+- `POST /api/v1/reminders`
+- `DELETE /api/v1/reminders/{id}`
+- `PUT /api/v1/reminders/{id}/complete`
+- `GET /api/v1/reminders/today`
+- `GET /api/v1/reminders/priority`
+- `POST /api/v1/reminders/parse`
+- `POST /api/v1/ai/reminder/parse`
 
-### AI & 统计
-- `POST /api/v1/ai/chat` — AI 对话（一次性返回）
-- `POST /api/v1/ai/chat/stream` — AI 对话（流式输出，自动结合笔记知识库）
-- `POST /api/v1/ai/makeup/generate` — 补课包（一次性返回）
-- `POST /api/v1/ai/makeup/stream` — 补课包（流式输出，传入 noteIds + documentIds 选择素材）
-- `GET /api/v1/reports/weekly` — 学习周报
-- `GET /api/v1/stats/dashboard` — 统计看板
-- `GET /api/v1/ai/provider/status` — 模型配置状态
+### AI 与 RAG
 
-> 除登录/注册外，所有接口需要 `Authorization: Bearer <token>` 请求头。
+- `POST /api/v1/ai/chat`
+- `POST /api/v1/ai/chat/stream`
+- `POST /api/v1/ai/makeup/generate`
+- `POST /api/v1/ai/makeup/stream`
+- `GET /api/v1/ai/provider/status`
+- `POST /api/v1/rag/documents`
+- `GET /api/v1/rag/documents`
+- `DELETE /api/v1/rag/documents/{id}`
+- `POST /api/v1/rag/chat`
+- `POST /api/v1/rag/chat/stream`
 
-## 运行测试
+### 报告与统计
+
+- `GET /api/v1/reports/weekly`
+- `GET /api/v1/reports/weekly/list`
+- `POST /api/v1/reports/weekly/generate`
+- `GET /api/v1/stats/dashboard`
+- `GET /api/v1/stats/continuity`
+
+## 项目结构
+
+```text
+lanxin-campus-ai/
+├── pom.xml
+├── README.md
+├── PROJECT_CONTEXT.md
+├── COMPETITION_PROPOSAL.md
+├── src/
+│   ├── main/
+│   │   ├── java/com/vivo/lanxin/campus/
+│   │   │   ├── CampusAiApplication.java
+│   │   │   ├── model/          # JPA 实体
+│   │   │   ├── repository/     # Spring Data JPA 仓储
+│   │   │   ├── service/        # Auth/JWT/AI/RAG 业务服务
+│   │   │   └── web/            # Controller、DTO、异常处理、限流、输入清洗
+│   │   └── resources/
+│   │       ├── application.yml
+│   │       └── static/         # index.html、styles.css、app.js
+│   └── test/
+│       ├── java/com/vivo/lanxin/campus/AppControllerTest.java
+│       └── resources/application.yml
+└── data/                       # 本地 H2 数据文件，运行后生成
+```
+
+## H2 控制台
+
+开发环境可访问：
+
+```text
+http://localhost:8080/h2-console
+```
+
+连接信息：
+
+```text
+JDBC URL: jdbc:h2:file:./data/campus-ai
+User Name: sa
+Password: 留空
+```
+
+## PDF 解析依赖
+
+RAG 上传 PDF 需要系统可执行文件 `pdftotext`。
+
+- Windows：可安装 Git for Windows，并将 `C:\Program Files\Git\mingw64\bin\` 加入 PATH
+- Linux：`sudo apt install poppler-utils`
+- macOS：`brew install poppler`
+
+未安装时，PDF 上传可能出现 `Cannot run program "pdftotext"`。
+
+## 测试
 
 ```bash
 mvn test
 ```
 
-测试使用 H2 内存数据库。
+当前集成测试覆盖登录、JWT 返回、用户信息、笔记处理、DTO 输出隔离、DDL 解析、首页待办、参数校验等核心路径。测试使用 H2 内存数据库。
 
 ## 开发注意事项
 
-**修改前端文件后必须重新打包**，因为 `java -jar` 运行时静态资源从 jar 包内加载，不从 `target/classes/` 读取：
+- 开发时推荐 `mvn spring-boot:run`，修改静态文件后刷新浏览器即可。
+- 使用 `java -jar` 运行时，静态资源来自 jar 包内部，改动前端后需要重新 `mvn clean package`。
+- 生产环境必须设置强随机 `APP_JWT_SECRET`，不要使用默认开发密钥。
+- `application.yml` 中 `spring.jpa.hibernate.ddl-auto=update` 适合演示环境，正式环境应改为迁移脚本管理表结构。
+- 如后续引入 Redis，可替换当前内存限流桶和本地用户信息缓存。
 
-```bash
-mvn clean package -DskipTests
-java -jar target/campus-ai-1.0.0.jar
-```
-
-**推荐开发模式**：使用 `mvn spring-boot:run`，修改静态文件后无需重新打包即可生效。JVM 已配置 1GB 堆内存（`pom.xml` 中的 `spring-boot-maven-plugin` 配置）。
-
-**PDF 提取依赖**：RAG 需要系统安装 `pdftotext`（poppler-utils）。
-
-- **Windows**：Git for Windows 自带 `pdftotext.exe`（路径 `C:\Program Files\Git\mingw64\bin\`）。如果已安装 Git，直接用 Git Bash 启动 `mvn spring-boot:run`，PATH 自动包含该目录。如果从 PowerShell / IDE 终端启动，需手动将该路径加入系统环境变量 PATH，或单独下载 [poppler for Windows](http://blog.alivate.com.au/poppler-windows/)。
-- **Linux**：`sudo apt install poppler-utils`
-- **macOS**：`brew install poppler`
-
-如未安装，PDF 上传会报错 `Cannot run program "pdftotext": CreateProcess error=2`。
-
-**图片压缩**：上传前客户端会自动压缩（Canvas 缩放至 1920px，JPEG 质量 0.7）。手机照片通常 5-15MB，不压缩会超时。
-
-**Token 存储**：Token 在服务端内存（ConcurrentHashMap），重启后全部失效，需重新登录。
-
-更多开发细节和关键文件说明见 [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md)。
+更多接手细节见 [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md)。

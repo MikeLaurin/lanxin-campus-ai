@@ -28,6 +28,10 @@ spring:
 
 app:
   demo-user: vivo-campus-demo
+  jwt:
+    secret: ${APP_JWT_SECRET:lanxin-campus-ai-dev-secret-change-me}
+    access-token-minutes: ${APP_JWT_ACCESS_MINUTES:120}
+    refresh-token-days: ${APP_JWT_REFRESH_DAYS:7}
 
 lanxin:
   api-key: ${LANXIN_API_KEY:}

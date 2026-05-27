@@ -81,10 +81,33 @@ class AppControllerTest {
     }
 
     @Test
+    void loginReturnsJwtAndRefreshToken() throws Exception {
+        mockMvc.perform(post("/api/v1/user/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"demo\",\"password\":\"demo123\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.token").isString())
+                .andExpect(jsonPath("$.refreshToken").isString())
+                .andExpect(jsonPath("$.expiresAt").isNumber());
+    }
+
+    @Test
     void notesReturnList() throws Exception {
         mockMvc.perform(get("/api/v1/notes")
                         .header("Authorization", auth()))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    void noteDtoDoesNotExposeInternalFields() throws Exception {
+        mockMvc.perform(post("/api/v1/notes")
+                        .header("Authorization", auth())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"dto note\",\"rawText\":\"content\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").exists())
+                .andExpect(jsonPath("$.userId").doesNotExist())
+                .andExpect(jsonPath("$.ragDocumentId").doesNotExist());
     }
 
     @Test

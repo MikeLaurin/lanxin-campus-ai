@@ -3,11 +3,14 @@ package com.vivo.lanxin.campus.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vivo.lanxin.campus.web.AiServiceException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -18,8 +21,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 @Service
@@ -142,48 +143,45 @@ public class LanxinApiClient {
                 .POST(HttpRequest.BodyPublishers.ofString(json))
                 .build();
 
-        CountDownLatch latch = new CountDownLatch(1);
-        httpClient.sendAsync(httpRequest, HttpResponse.BodyHandlers.ofLines())
-                .thenAccept(response -> {
-                    try {
-                        response.body().forEach(line -> {
-                            if (line.startsWith("data:") && !"data: [DONE]".equals(line)) {
-                                String data = line.substring(5).trim();
-                                try {
-                                    JsonNode node = objectMapper.readTree(data);
-                                    JsonNode delta = node.at("/choices/0/delta");
-                                    JsonNode content = delta.get("content");
-                                    JsonNode reasoning = delta.get("reasoning_content");
-                                    String text = null;
-                                    if (content != null && content.isTextual() && !content.asText().isEmpty()) {
-                                        text = content.asText();
-                                    } else if (reasoning != null && reasoning.isTextual() && !reasoning.asText().isEmpty()) {
-                                        text = reasoning.asText();
-                                    }
-                                    if (text != null) {
-                                        onToken.accept(text);
-                                    }
-                                } catch (Exception ignored) {
-                                    // skip unparseable SSE lines
-                                }
-                            }
-                        });
-                    } finally {
-                        latch.countDown();
-                    }
-                })
-                .exceptionally(e -> {
-                    System.err.println("[LanxinApiClient] Stream error: " + e.getMessage());
-                    latch.countDown();
-                    return null;
-        });
-
         try {
-            if (!latch.await(60, TimeUnit.SECONDS)) {
-                System.err.println("[LanxinApiClient] Stream timed out after 60 seconds");
+            HttpResponse<java.util.stream.Stream<String>> response =
+                    httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofLines());
+            if (response.statusCode() >= 400) {
+                throw new AiServiceException(response.statusCode(), "AI 服务调用失败，状态码：" + response.statusCode());
+            }
+            try (java.util.stream.Stream<String> lines = response.body()) {
+                lines.forEach(line -> handleSseLine(line, onToken));
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            throw new AiServiceException(null, "AI 服务请求被中断");
+        } catch (java.net.http.HttpTimeoutException e) {
+            throw new AiServiceException(504, "AI 服务响应超时");
+        } catch (java.io.IOException e) {
+            throw new AiServiceException(503, "AI 服务网络异常：" + e.getMessage());
+        }
+    }
+
+    private void handleSseLine(String line, Consumer<String> onToken) {
+        if (line.startsWith("data:") && !"data: [DONE]".equals(line)) {
+            String data = line.substring(5).trim();
+            try {
+                JsonNode node = objectMapper.readTree(data);
+                JsonNode delta = node.at("/choices/0/delta");
+                JsonNode content = delta.get("content");
+                JsonNode reasoning = delta.get("reasoning_content");
+                String text = null;
+                if (content != null && content.isTextual() && !content.asText().isEmpty()) {
+                    text = content.asText();
+                } else if (reasoning != null && reasoning.isTextual() && !reasoning.asText().isEmpty()) {
+                    text = reasoning.asText();
+                }
+                if (text != null) {
+                    onToken.accept(text);
+                }
+            } catch (Exception ignored) {
+                // skip unparseable SSE lines
+            }
         }
     }
 
@@ -213,9 +211,16 @@ public class LanxinApiClient {
                     .retrieve()
                     .body(JsonNode.class);
             return extractContent(response);
+        } catch (RestClientResponseException ex) {
+            System.err.println("[LanxinApiClient] API call failed: " + ex.getStatusCode() + " " + ex.getMessage());
+            int status = ex.getStatusCode().value();
+            throw new AiServiceException(status, "AI 服务调用失败，状态码：" + status);
+        } catch (ResourceAccessException ex) {
+            System.err.println("[LanxinApiClient] API network error: " + ex.getMessage());
+            throw new AiServiceException(503, "AI 服务网络异常：" + ex.getMessage());
         } catch (Exception ex) {
             System.err.println("[LanxinApiClient] API call failed: " + ex.getMessage());
-            return Optional.empty();
+            throw new AiServiceException(null, "AI 服务返回异常：" + ex.getMessage());
         }
     }
 
@@ -248,9 +253,16 @@ public class LanxinApiClient {
                     .retrieve()
                     .body(JsonNode.class);
             return extractEmbedding(response);
+        } catch (RestClientResponseException ex) {
+            System.err.println("[LanxinApiClient] Embedding call failed: " + ex.getStatusCode() + " " + ex.getMessage());
+            int status = ex.getStatusCode().value();
+            throw new AiServiceException(status, "AI 向量服务调用失败，状态码：" + status);
+        } catch (ResourceAccessException ex) {
+            System.err.println("[LanxinApiClient] Embedding network error: " + ex.getMessage());
+            throw new AiServiceException(503, "AI 向量服务网络异常：" + ex.getMessage());
         } catch (Exception ex) {
             System.err.println("[LanxinApiClient] Embedding call failed: " + ex.getMessage());
-            return Optional.empty();
+            throw new AiServiceException(null, "AI 向量服务返回异常：" + ex.getMessage());
         }
     }
 

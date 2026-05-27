@@ -11,6 +11,8 @@ import com.vivo.lanxin.campus.service.RagService;
 import com.vivo.lanxin.campus.model.Document;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -24,7 +26,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
-import org.springframework.http.MediaType;
 
 import java.time.LocalDate;
 import java.util.Comparator;
@@ -55,22 +56,25 @@ public class AppController {
     // ── Auth ──────────────────────────────────────────────
 
     @PostMapping("/user/login")
-    public Map<String, Object> login(@RequestBody Map<String, String> body) {
-        String username = body.getOrDefault("username", "");
-        String password = body.getOrDefault("password", "");
-        return auth.login(username, password);
+    public Map<String, Object> login(@Valid @RequestBody LoginRequest request) {
+        return auth.login(request.username(), request.password());
     }
 
     @PostMapping("/user/register")
-    public Map<String, Object> register(@RequestBody Map<String, String> body) {
+    public Map<String, Object> register(@Valid @RequestBody RegisterRequest request) {
         return auth.register(
-                body.getOrDefault("username", ""),
-                body.getOrDefault("password", ""),
-                body.getOrDefault("name", ""),
-                body.getOrDefault("school", ""),
-                body.getOrDefault("major", ""),
-                body.getOrDefault("grade", "")
+                request.username(),
+                request.password(),
+                request.name(),
+                request.school(),
+                request.major(),
+                request.grade()
         );
+    }
+
+    @PostMapping("/user/refresh")
+    public Map<String, Object> refresh(@Valid @RequestBody RefreshRequest request) {
+        return auth.refresh(request.refreshToken());
     }
 
     @PostMapping("/user/logout")
@@ -90,51 +94,52 @@ public class AppController {
     // ── Notes ─────────────────────────────────────────────
 
     @GetMapping("/notes")
-    public List<Note> notes(@RequestHeader("Authorization") String authHeader,
-                            @RequestParam(required = false) String keyword) {
+    public List<NoteDto> notes(@RequestHeader("Authorization") String authHeader,
+                               @RequestParam(required = false) @Size(max = 80) String keyword) {
         long userId = auth.getUserId(authHeader);
+        keyword = InputSanitizer.clean(keyword, 80);
         if (keyword != null && !keyword.isBlank()) {
-            return noteRepo.searchByUser(userId, keyword);
+            return noteRepo.searchByUser(userId, keyword).stream().map(NoteDto::from).toList();
         }
-        return noteRepo.findByUserIdOrderByUpdatedAtDesc(userId);
+        return noteRepo.findByUserIdOrderByUpdatedAtDesc(userId).stream().map(NoteDto::from).toList();
     }
 
     @PostMapping("/notes")
-    public Note createNote(@RequestHeader("Authorization") String authHeader,
-                           @Valid @RequestBody NoteRequest request) {
+    public NoteDto createNote(@RequestHeader("Authorization") String authHeader,
+                              @Valid @RequestBody NoteRequest request) {
         Note note = buildNote(request);
         note.setUserId(auth.getUserId(authHeader));
         note = noteRepo.save(note);
         note.setRagDocumentId(ragService.indexNote(note));
-        return noteRepo.save(note);
+        return NoteDto.from(noteRepo.save(note));
     }
 
     @GetMapping("/notes/{id}")
-    public ResponseEntity<Note> note(@RequestHeader("Authorization") String authHeader,
-                                      @PathVariable long id) {
+    public ResponseEntity<NoteDto> note(@RequestHeader("Authorization") String authHeader,
+                                         @PathVariable long id) {
         long userId = auth.getUserId(authHeader);
         return noteRepo.findById(id)
                 .filter(n -> n.getUserId() == userId)
-                .map(ResponseEntity::ok)
+                .map(note -> ResponseEntity.ok(NoteDto.from(note)))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     @PutMapping("/notes/{id}")
-    public ResponseEntity<Note> updateNote(@RequestHeader("Authorization") String authHeader,
-                                            @PathVariable long id, @RequestBody NoteRequest request) {
+    public ResponseEntity<NoteDto> updateNote(@RequestHeader("Authorization") String authHeader,
+                                               @PathVariable long id, @Valid @RequestBody NoteRequest request) {
         long userId = auth.getUserId(authHeader);
         return noteRepo.findById(id).filter(n -> n.getUserId() == userId).map(note -> {
-            note.setTitle(first(request.title(), note.getTitle()));
-            note.setCourse(first(request.course(), note.getCourse()));
-            note.setRawText(first(request.rawText(), note.getRawText()));
-            note.setSummary(first(request.summary(), note.getSummary()));
-            if (request.keyPoints() != null) note.setKeyPoints(request.keyPoints());
-            if (request.formulas() != null) note.setFormulas(request.formulas());
-            if (request.tags() != null) note.setTags(request.tags());
-            note.setMindMap(first(request.mindMap(), note.getMindMap()));
+            note.setTitle(first(InputSanitizer.nullable(request.title(), 120), note.getTitle()));
+            note.setCourse(first(InputSanitizer.nullable(request.course(), 80), note.getCourse()));
+            note.setRawText(first(InputSanitizer.nullable(request.rawText(), 20_000), note.getRawText()));
+            note.setSummary(first(InputSanitizer.nullable(request.summary(), 4_000), note.getSummary()));
+            if (request.keyPoints() != null) note.setKeyPoints(InputSanitizer.cleanList(request.keyPoints(), 200, 20));
+            if (request.formulas() != null) note.setFormulas(InputSanitizer.cleanList(request.formulas(), 200, 20));
+            if (request.tags() != null) note.setTags(InputSanitizer.cleanList(request.tags(), 40, 12));
+            note.setMindMap(first(InputSanitizer.nullable(request.mindMap(), 6_000), note.getMindMap()));
             note = noteRepo.save(note);
             ragService.reindexNote(note);
-            return ResponseEntity.ok(noteRepo.save(note));
+            return ResponseEntity.ok(NoteDto.from(noteRepo.save(note)));
         }).orElseGet(() -> ResponseEntity.notFound().build());
     }
 
@@ -164,12 +169,12 @@ public class AppController {
     public Map<String, Object> batchSync(@RequestHeader("Authorization") String authHeader,
                                           @RequestBody List<NoteRequest> notes) {
         long userId = auth.getUserId(authHeader);
-        List<Note> saved = notes.stream().map(req -> {
+        List<NoteDto> saved = notes.stream().limit(100).map(req -> {
             Note note = buildNote(req);
             note.setUserId(userId);
             note = noteRepo.save(note);
             note.setRagDocumentId(ragService.indexNote(note));
-            return noteRepo.save(note);
+            return NoteDto.from(noteRepo.save(note));
         }).toList();
         return Map.of("synced", saved.size(), "items", saved);
     }
@@ -177,36 +182,36 @@ public class AppController {
     // ── Reminders ─────────────────────────────────────────
 
     @GetMapping("/reminders")
-    public List<Reminder> reminders(@RequestHeader("Authorization") String authHeader,
-                                    @RequestParam(defaultValue = "false") boolean includeCompleted) {
+    public List<ReminderDto> reminders(@RequestHeader("Authorization") String authHeader,
+                                       @RequestParam(defaultValue = "false") boolean includeCompleted) {
         long userId = auth.getUserId(authHeader);
         if (includeCompleted) {
-            return reminderRepo.findByUserIdOrderByDueDateAsc(userId);
+            return reminderRepo.findByUserIdOrderByDueDateAsc(userId).stream().map(ReminderDto::from).toList();
         }
-        return reminderRepo.findByUserIdAndCompletedFalse(userId);
+        return reminderRepo.findByUserIdAndCompletedFalse(userId).stream().map(ReminderDto::from).toList();
     }
 
     @PostMapping("/reminders")
-    public Reminder createReminder(@RequestHeader("Authorization") String authHeader,
-                                    @Valid @RequestBody ReminderRequest request) {
+    public ReminderDto createReminder(@RequestHeader("Authorization") String authHeader,
+                                      @Valid @RequestBody ReminderRequest request) {
         Reminder reminder = new Reminder();
         reminder.setUserId(auth.getUserId(authHeader));
-        reminder.setTitle(request.title());
-        reminder.setCourse(first(request.course(), "专业课程"));
+        reminder.setTitle(InputSanitizer.clean(request.title(), 120));
+        reminder.setCourse(first(InputSanitizer.nullable(request.course(), 80), "专业课程"));
         reminder.setDueDate(request.dueDate() == null ? LocalDate.now().plusDays(3) : request.dueDate());
-        reminder.setPriority(first(request.priority(), "medium"));
-        reminder.setSource(first(request.source(), "手动创建"));
+        reminder.setPriority(first(InputSanitizer.nullable(request.priority(), 20), "medium"));
+        reminder.setSource(first(InputSanitizer.nullable(request.source(), 200), "手动创建"));
         reminder.setRelatedNoteId(request.relatedNoteId());
-        return reminderRepo.save(reminder);
+        return ReminderDto.from(reminderRepo.save(reminder));
     }
 
     @PutMapping("/reminders/{id}/complete")
-    public ResponseEntity<Reminder> completeReminder(@RequestHeader("Authorization") String authHeader,
-                                                      @PathVariable long id) {
+    public ResponseEntity<ReminderDto> completeReminder(@RequestHeader("Authorization") String authHeader,
+                                                        @PathVariable long id) {
         long userId = auth.getUserId(authHeader);
         return reminderRepo.findById(id).filter(r -> r.getUserId() == userId).map(reminder -> {
             reminder.setCompleted(true);
-            return ResponseEntity.ok(reminderRepo.save(reminder));
+            return ResponseEntity.ok(ReminderDto.from(reminderRepo.save(reminder)));
         }).orElseGet(() -> ResponseEntity.notFound().build());
     }
 
@@ -221,44 +226,49 @@ public class AppController {
     }
 
     @GetMapping("/reminders/today")
-    public List<Reminder> todayReminders(@RequestHeader("Authorization") String authHeader) {
+    public List<ReminderDto> todayReminders(@RequestHeader("Authorization") String authHeader) {
         long userId = auth.getUserId(authHeader);
         LocalDate today = LocalDate.now();
-        return reminderRepo.findByUserIdAndCompletedFalseAndDueDateLessThanEqualOrderByDueDateAsc(userId, today.plusDays(3));
+        return reminderRepo.findByUserIdAndCompletedFalseAndDueDateLessThanEqualOrderByDueDateAsc(userId, today.plusDays(3))
+                .stream().map(ReminderDto::from).toList();
     }
 
     @GetMapping("/reminders/priority")
-    public List<Reminder> priorityReminders(@RequestHeader("Authorization") String authHeader) {
+    public List<ReminderDto> priorityReminders(@RequestHeader("Authorization") String authHeader) {
         long userId = auth.getUserId(authHeader);
         List<String> order = List.of("high", "medium", "low");
         return reminderRepo.findByUserIdAndCompletedFalse(userId).stream()
                 .sorted(Comparator.comparingInt(r -> order.indexOf(r.getPriority())))
+                .map(ReminderDto::from)
                 .toList();
     }
 
     @PostMapping("/reminders/parse")
-    public Reminder parseReminder(@RequestHeader("Authorization") String authHeader,
-                                   @RequestBody Map<String, Object> payload) {
-        Reminder reminder = ai.parseReminder(payload);
+    public ReminderDto parseReminder(@RequestHeader("Authorization") String authHeader,
+                                     @Valid @RequestBody TextRequest request) {
+        Reminder reminder = ai.parseReminder(Map.of("text", InputSanitizer.clean(request.text(), 2_000)));
         reminder.setUserId(auth.getUserId(authHeader));
-        return reminderRepo.save(reminder);
+        return ReminderDto.from(reminderRepo.save(reminder));
     }
 
     // ── AI ────────────────────────────────────────────────
 
     @PostMapping("/ai/note/process")
-    public Note processNote(@RequestHeader("Authorization") String authHeader,
-                             @RequestBody Map<String, Object> payload) {
-        Note note = ai.processNote(payload);
+    public NoteDto processNote(@RequestHeader("Authorization") String authHeader,
+                               @Valid @RequestBody NoteProcessRequest request) {
+        Note note = ai.processNote(Map.of(
+                "rawText", InputSanitizer.clean(request.rawText(), 20_000),
+                "offline", request.offline()
+        ));
         note.setUserId(auth.getUserId(authHeader));
         note = noteRepo.save(note);
         note.setRagDocumentId(ragService.indexNote(note));
-        return noteRepo.save(note);
+        return NoteDto.from(noteRepo.save(note));
     }
 
     @PostMapping("/ai/note/process-image")
-    public Note processImage(@RequestHeader("Authorization") String authHeader,
-                              @RequestParam("file") MultipartFile file) throws java.io.IOException {
+    public NoteDto processImage(@RequestHeader("Authorization") String authHeader,
+                                @RequestParam("file") MultipartFile file) throws java.io.IOException {
         if (file.isEmpty()) {
             throw new IllegalArgumentException("文件为空");
         }
@@ -272,52 +282,55 @@ public class AppController {
         note.setUserId(auth.getUserId(authHeader));
         note = noteRepo.save(note);
         note.setRagDocumentId(ragService.indexNote(note));
-        return noteRepo.save(note);
+        return NoteDto.from(noteRepo.save(note));
     }
 
     @PostMapping("/ai/note/mindmap")
     public Map<String, String> generateMindMap(@RequestHeader("Authorization") String authHeader,
-                                                @RequestBody Map<String, Object> payload) {
-        Note note = ai.processNote(payload);
+                                                @Valid @RequestBody NoteProcessRequest request) {
+        Note note = ai.processNote(Map.of(
+                "rawText", InputSanitizer.clean(request.rawText(), 20_000),
+                "offline", request.offline()
+        ));
         note.setUserId(auth.getUserId(authHeader));
         noteRepo.save(note);
         return Map.of("mindMap", note.getMindMap());
     }
 
     @PostMapping("/ai/reminder/parse")
-    public Reminder aiParseReminder(@RequestHeader("Authorization") String authHeader,
-                                     @RequestBody Map<String, Object> payload) {
-        return parseReminder(authHeader, payload);
+    public ReminderDto aiParseReminder(@RequestHeader("Authorization") String authHeader,
+                                       @Valid @RequestBody TextRequest request) {
+        return parseReminder(authHeader, request);
     }
 
     @PostMapping("/ai/makeup/generate")
     public Map<String, Object> makeup(@RequestHeader(value = "Authorization", required = false) String authHeader,
-                                      @RequestBody Map<String, Object> payload) {
+                                      @Valid @RequestBody MakeupRequest request) {
         Long userId = getUserIdOrNull(authHeader);
-        return ai.makeupPackage(userId, String.valueOf(payload.getOrDefault("course", "专业课程")));
+        return ai.makeupPackage(userId, first(InputSanitizer.nullable(request.course(), 80), "专业课程"));
     }
 
     @PostMapping(value = "/ai/makeup/stream", produces = "text/plain;charset=UTF-8")
     public StreamingResponseBody makeupStream(@RequestHeader(value = "Authorization", required = false) String authHeader,
-                                               @RequestBody Map<String, Object> payload) {
+                                               @RequestBody SourceSelectionRequest request) {
         Long userId = getUserIdOrNull(authHeader);
-        List<Long> noteIds = parseLongList(payload.get("noteIds"));
-        List<Long> documentIds = parseLongList(payload.get("documentIds"));
+        List<Long> noteIds = limitIds(request.noteIds());
+        List<Long> documentIds = limitIds(request.documentIds());
         return ai.makeupPackageStream(userId, noteIds, documentIds);
     }
 
     @PostMapping("/ai/chat")
     public Map<String, Object> chat(@RequestHeader(value = "Authorization", required = false) String authHeader,
-                                    @RequestBody Map<String, Object> payload) {
+                                    @Valid @RequestBody ChatRequest request) {
         Long userId = getUserIdOrNull(authHeader);
-        return ai.chat(userId, payload);
+        return ai.chat(userId, Map.of("message", InputSanitizer.clean(request.message(), 4_000)));
     }
 
     @PostMapping(value = "/ai/chat/stream", produces = "text/plain;charset=UTF-8")
     public StreamingResponseBody chatStream(@RequestHeader(value = "Authorization", required = false) String authHeader,
-                                            @RequestBody Map<String, Object> payload) {
+                                            @Valid @RequestBody ChatRequest request) {
         Long userId = getUserIdOrNull(authHeader);
-        String message = String.valueOf(payload.getOrDefault("message", ""));
+        String message = InputSanitizer.clean(request.message(), 4_000);
         return ai.chatStream(userId, message);
     }
 
@@ -352,7 +365,7 @@ public class AppController {
             throw new IllegalArgumentException("文件为空");
         }
 
-        String originalFilename = file.getOriginalFilename();
+        String originalFilename = InputSanitizer.clean(file.getOriginalFilename(), 180);
         String fileType = detectFileType(originalFilename);
         if (!"PDF".equals(fileType) && !"TXT".equals(fileType)) {
             throw new IllegalArgumentException("仅支持 PDF 和 TXT 文件");
@@ -363,7 +376,7 @@ public class AppController {
             throw new IllegalArgumentException("文件过大，最大支持 20MB");
         }
 
-        String title = originalFilename != null ? originalFilename : "未命名文档";
+        String title = originalFilename != null && !originalFilename.isBlank() ? originalFilename : "未命名文档";
         Document doc = ragService.ingestDocument(
                 userId, title, originalFilename, fileType, file.getInputStream());
 
@@ -406,18 +419,18 @@ public class AppController {
     @PostMapping("/rag/chat")
     public Map<String, Object> ragChat(
             @RequestHeader("Authorization") String authHeader,
-            @RequestBody Map<String, Object> payload) {
+            @Valid @RequestBody ChatRequest request) {
         long userId = auth.getUserId(authHeader);
-        String message = String.valueOf(payload.getOrDefault("message", ""));
+        String message = InputSanitizer.clean(request.message(), 4_000);
         return ai.chatWithRag(userId, message);
     }
 
     @PostMapping(value = "/rag/chat/stream", produces = "text/plain;charset=UTF-8")
     public StreamingResponseBody ragChatStream(
             @RequestHeader("Authorization") String authHeader,
-            @RequestBody Map<String, Object> payload) {
+            @Valid @RequestBody ChatRequest request) {
         long userId = auth.getUserId(authHeader);
-        String message = String.valueOf(payload.getOrDefault("message", ""));
+        String message = InputSanitizer.clean(request.message(), 4_000);
         return ai.chatWithRagStream(userId, message);
     }
 
@@ -491,14 +504,14 @@ public class AppController {
 
     private Note buildNote(NoteRequest request) {
         Note note = new Note();
-        note.setTitle(request.title());
-        note.setCourse(request.course());
-        note.setRawText(request.rawText());
-        note.setSummary(request.summary());
-        note.setKeyPoints(request.keyPoints() == null ? List.of() : request.keyPoints());
-        note.setFormulas(request.formulas() == null ? List.of() : request.formulas());
-        note.setTags(request.tags() == null ? List.of() : request.tags());
-        note.setMindMap(request.mindMap());
+        note.setTitle(InputSanitizer.clean(request.title(), 120));
+        note.setCourse(InputSanitizer.clean(first(request.course(), "专业课程"), 80));
+        note.setRawText(InputSanitizer.clean(request.rawText(), 20_000));
+        note.setSummary(InputSanitizer.clean(request.summary(), 4_000));
+        note.setKeyPoints(InputSanitizer.cleanList(request.keyPoints(), 200, 20));
+        note.setFormulas(InputSanitizer.cleanList(request.formulas(), 200, 20));
+        note.setTags(InputSanitizer.cleanList(request.tags(), 40, 12));
+        note.setMindMap(InputSanitizer.clean(request.mindMap(), 6_000));
         note.setOfflineCreated(request.offlineCreated());
         return note;
     }
@@ -515,14 +528,11 @@ public class AppController {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private List<Long> parseLongList(Object value) {
-        if (value instanceof List<?> list) {
-            return list.stream()
-                    .map(item -> item instanceof Number ? ((Number) item).longValue() : Long.parseLong(String.valueOf(item)))
-                    .toList();
+    private List<Long> limitIds(List<Long> ids) {
+        if (ids == null) {
+            return List.of();
         }
-        return List.of();
+        return ids.stream().filter(id -> id != null && id > 0).limit(50).toList();
     }
 
     private String detectFileType(String filename) {
@@ -534,24 +544,53 @@ public class AppController {
         return "UNKNOWN";
     }
 
+    public record LoginRequest(
+            @NotBlank @Size(max = 50) @Pattern(regexp = "^[A-Za-z0-9_\\-]{3,50}$") String username,
+            @NotBlank @Size(min = 6, max = 72) String password
+    ) {}
+
+    public record RegisterRequest(
+            @NotBlank @Size(max = 50) @Pattern(regexp = "^[A-Za-z0-9_\\-]{3,50}$") String username,
+            @NotBlank @Size(min = 6, max = 72) String password,
+            @Size(max = 50) String name,
+            @Size(max = 100) String school,
+            @Size(max = 50) String major,
+            @Size(max = 20) String grade
+    ) {}
+
+    public record RefreshRequest(@NotBlank String refreshToken) {}
+
+    public record NoteProcessRequest(
+            @Size(max = 20_000) String rawText,
+            boolean offline
+    ) {}
+
+    public record TextRequest(@NotBlank @Size(max = 2_000) String text) {}
+
+    public record ChatRequest(@NotBlank @Size(max = 4_000) String message) {}
+
+    public record MakeupRequest(@Size(max = 80) String course) {}
+
+    public record SourceSelectionRequest(List<Long> noteIds, List<Long> documentIds) {}
+
     public record NoteRequest(
-            @NotBlank String title,
-            String course,
-            String rawText,
-            String summary,
+            @NotBlank @Size(max = 120) String title,
+            @Size(max = 80) String course,
+            @Size(max = 20_000) String rawText,
+            @Size(max = 4_000) String summary,
             List<String> keyPoints,
             List<String> formulas,
             List<String> tags,
-            String mindMap,
+            @Size(max = 6_000) String mindMap,
             boolean offlineCreated
     ) {}
 
     public record ReminderRequest(
-            @NotBlank String title,
-            String course,
+            @NotBlank @Size(max = 120) String title,
+            @Size(max = 80) String course,
             LocalDate dueDate,
-            String priority,
-            String source,
+            @Pattern(regexp = "high|medium|low") String priority,
+            @Size(max = 200) String source,
             Long relatedNoteId
     ) {}
 }

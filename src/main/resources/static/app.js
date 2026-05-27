@@ -2,35 +2,95 @@ const state = {
   offline: false,
   currentPanel: "home",
   token: localStorage.getItem("lanxin_token") || "",
+  refreshToken: localStorage.getItem("lanxin_refresh_token") || "",
+  pending: new Set(),
   user: null
 };
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
-async function api(path, options = {}) {
+async function parseResponseError(response, fallback) {
+  const body = await response.json().catch(() => ({}));
+  const message = body.error || body.message || fallback || `请求失败：${response.status}`;
+  const error = new Error(message);
+  error.status = response.status;
+  error.code = body.code;
+  error.aiStatus = body.aiStatus;
+  return error;
+}
+
+function clearAuthToken() {
+  localStorage.removeItem("lanxin_token");
+  localStorage.removeItem("lanxin_refresh_token");
+  state.token = "";
+  state.refreshToken = "";
+}
+
+async function refreshAccessToken() {
+  if (!state.refreshToken) {
+    return false;
+  }
+  const response = await fetch("/api/v1/user/refresh", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refreshToken: state.refreshToken })
+  });
+  if (!response.ok) {
+    clearAuthToken();
+    return false;
+  }
+  const data = await response.json();
+  persistAuth(data);
+  return true;
+}
+
+function persistAuth(data) {
+  state.token = data.token;
+  state.refreshToken = data.refreshToken || "";
+  localStorage.setItem("lanxin_token", state.token);
+  if (state.refreshToken) {
+    localStorage.setItem("lanxin_refresh_token", state.refreshToken);
+  }
+}
+
+async function api(path, options = {}, retry = true) {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
   if (state.token) {
     headers["Authorization"] = "Bearer " + state.token;
   }
   const response = await fetch(path, { headers, ...options });
   if (response.status === 401) {
-    localStorage.removeItem("lanxin_token");
-    state.token = "";
+    if (retry && await refreshAccessToken()) {
+      return api(path, options, false);
+    }
+    clearAuthToken();
     showAuth();
     throw new Error("登录已过期");
   }
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    const error = new Error(body.error || `API ${path} failed: ${response.status}`);
-    error.status = response.status;
-    throw error;
+    throw await parseResponseError(response, `API ${path} failed: ${response.status}`);
   }
   if (response.status === 204) {
     return null;
   }
   const text = await response.text();
   return text ? JSON.parse(text) : null;
+}
+
+async function withButtonLoading(button, loadingText, task) {
+  if (!button || button.disabled) return;
+  const oldHtml = button.innerHTML;
+  button.disabled = true;
+  button.classList.add("is-loading");
+  button.textContent = loadingText;
+  try {
+    return await task();
+  } finally {
+    button.innerHTML = oldHtml;
+    button.classList.remove("is-loading");
+    button.disabled = false;
+  }
 }
 
 function showToast(message) {
@@ -63,26 +123,31 @@ function showApp(user) {
 
 async function handleLogin(e) {
   e.preventDefault();
+  const submit = e.submitter || $("#loginForm .auth-submit");
   const username = $("#loginUsername").value.trim();
   const password = $("#loginPassword").value;
-  try {
+  await withButtonLoading(submit, "登录中...", async () => {
+    try {
     const data = await fetch("/api/v1/user/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password })
-    }).then(r => r.json());
-    if (data.error) throw new Error(data.error);
-    state.token = data.token;
-    localStorage.setItem("lanxin_token", data.token);
+    }).then(async r => {
+      if (!r.ok) throw await parseResponseError(r, "登录失败");
+      return r.json();
+    });
+    persistAuth(data);
     showApp(data);
     await bootApp();
-  } catch (err) {
-    $("#authError").textContent = err.message;
-  }
+    } catch (err) {
+      $("#authError").textContent = err.message;
+    }
+  });
 }
 
 async function handleRegister(e) {
   e.preventDefault();
+  const submit = e.submitter || $("#registerForm .auth-submit");
   const username = $("#regUsername").value.trim();
   const password = $("#regPassword").value;
   const name = $("#regName").value.trim();
@@ -93,26 +158,28 @@ async function handleRegister(e) {
     $("#authError").textContent = "用户名和密码不能为空";
     return;
   }
-  try {
+  await withButtonLoading(submit, "注册中...", async () => {
+    try {
     const data = await fetch("/api/v1/user/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password, name, school, major, grade })
-    }).then(r => r.json());
-    if (data.error) throw new Error(data.error);
-    state.token = data.token;
-    localStorage.setItem("lanxin_token", data.token);
+    }).then(async r => {
+      if (!r.ok) throw await parseResponseError(r, "注册失败");
+      return r.json();
+    });
+    persistAuth(data);
     showApp(data);
     await bootApp();
-  } catch (err) {
-    $("#authError").textContent = err.message;
-  }
+    } catch (err) {
+      $("#authError").textContent = err.message;
+    }
+  });
 }
 
 async function handleLogout() {
   try { await api("/api/v1/user/logout", { method: "POST" }); } catch (_) {}
-  localStorage.removeItem("lanxin_token");
-  state.token = "";
+  clearAuthToken();
   state.user = null;
   showAuth();
 }
@@ -146,24 +213,24 @@ function renderStats(data) {
 function reminderItem(reminder) {
   return `
     <article class="list-item">
-      <h3>${reminder.title}</h3>
-      <p>${reminder.course} · 截止 ${reminder.dueDate}</p>
+      <h3>${escapeHtml(reminder.title || "")}</h3>
+      <p>${escapeHtml(reminder.course || "")} · 截止 ${escapeHtml(reminder.dueDate || "")}</p>
       <div class="meta-row">
         <span class="tag ${reminder.priority}">${priorityLabel(reminder.priority)}</span>
-        <span class="tag">${reminder.source || "AI 管家提醒"}</span>
+        <span class="tag">${escapeHtml(reminder.source || "AI 管家提醒")}</span>
       </div>
     </article>
   `;
 }
 
 function noteItem(note, showActions = false) {
-  const tags = (note.tags || []).map((tag) => `<span class="tag">${tag}</span>`).join("");
+  const tags = (note.tags || []).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("");
   return `
     <article class="list-item">
-      <h3>${note.title}</h3>
-      <p>${note.summary || note.rawText || ""}</p>
+      <h3>${escapeHtml(note.title || "")}</h3>
+      <p>${escapeHtml(note.summary || note.rawText || "")}</p>
       <div class="meta-row">
-        <span class="tag">${note.course}</span>
+        <span class="tag">${escapeHtml(note.course || "")}</span>
         ${note.offlineCreated ? '<span class="tag low">离线创建</span>' : ""}
         ${tags}
       </div>
@@ -238,41 +305,74 @@ async function loadTasks(priority = false) {
 function renderNoteResult(note) {
   $("#noteResult").innerHTML = `
     <div class="section-head">
-      <h2>${note.title}</h2>
+      <h2>${escapeHtml(note.title || "")}</h2>
       <span class="status-pill">${note.offlineCreated ? "端侧离线" : "云端增强"}</span>
     </div>
-    <p class="compact-text">${note.summary}</p>
-    <div class="meta-row">${note.keyPoints.map((point) => `<span class="tag">${point}</span>`).join("")}</div>
+    <p class="compact-text">${escapeHtml(note.summary || "")}</p>
+    <div class="meta-row">${(note.keyPoints || []).map((point) => `<span class="tag">${escapeHtml(point)}</span>`).join("")}</div>
     <h3 style="margin:14px 0 8px;">公式/术语</h3>
-    <div class="meta-row">${note.formulas.map((formula) => `<span class="tag">${formula}</span>`).join("")}</div>
+    <div class="meta-row">${(note.formulas || []).map((formula) => `<span class="tag">${escapeHtml(formula)}</span>`).join("")}</div>
     <h3 style="margin:14px 0 8px;">思维导图</h3>
-    <div class="mindmap">${note.mindMap}</div>
+    <div class="mindmap">${escapeHtml(note.mindMap || "")}</div>
   `;
 }
 
 // ── Actions ───────────────────────────────────────────
 
-async function processNote() {
+async function processNote(event) {
+  const button = event?.currentTarget || $("#processNote");
+  if (state.pending.has("process-note")) return;
   const rawText = $("#noteInput").value.trim();
-  const note = await api("/api/v1/ai/note/process", {
-    method: "POST",
-    body: JSON.stringify({ rawText, offline: state.offline })
+  if (!rawText) {
+    showToast("请输入课堂内容");
+    return;
+  }
+  await withButtonLoading(button, "生成中...", async () => {
+    state.pending.add("process-note");
+    try {
+      $("#noteResult").innerHTML = empty("AI 正在整理笔记...");
+      const note = await api("/api/v1/ai/note/process", {
+        method: "POST",
+        body: JSON.stringify({ rawText, offline: state.offline })
+      });
+      renderNoteResult(note);
+      await loadDashboard();
+    } catch (err) {
+      showToast("生成失败：" + err.message);
+      $("#noteResult").innerHTML = empty("生成失败：" + err.message);
+    } finally {
+      state.pending.delete("process-note");
+    }
   });
-  renderNoteResult(note);
-  await loadDashboard();
 }
 
-async function parseDdl() {
+async function parseDdl(event) {
+  const button = event?.currentTarget || $("#parseDdl");
+  if (state.pending.has("parse-ddl")) return;
   const text = $("#ddlInput").value.trim();
-  await api("/api/v1/reminders/parse", {
-    method: "POST",
-    body: JSON.stringify({ text })
+  if (!text) {
+    showToast("请输入 DDL 文本");
+    return;
+  }
+  await withButtonLoading(button, "解析中...", async () => {
+    state.pending.add("parse-ddl");
+    try {
+      await api("/api/v1/reminders/parse", {
+        method: "POST",
+        body: JSON.stringify({ text })
+      });
+      showToast("DDL 已创建");
+      await Promise.all([loadTasks(), loadDashboard()]);
+    } catch (err) {
+      showToast("解析失败：" + err.message);
+    } finally {
+      state.pending.delete("parse-ddl");
+    }
   });
-  await Promise.all([loadTasks(), loadDashboard()]);
 }
 
 function escapeHtml(text) {
-  return text
+  return String(text ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -288,10 +388,16 @@ function appendMessage(role, content) {
 }
 
 async function sendRagChat() {
+  if (state.pending.has("chat")) return;
   const input = $("#chatInput");
+  const button = $("#sendChat");
   const message = input.value.trim();
   if (!message) return;
   input.value = "";
+  input.disabled = true;
+  button.disabled = true;
+  button.classList.add("is-loading");
+  state.pending.add("chat");
 
   appendMessage("user", message);
 
@@ -308,7 +414,13 @@ async function sendRagChat() {
       body: JSON.stringify({ message })
     });
 
-    if (response.status === 401) { showAuth(); return; }
+    if (response.status === 401) {
+      if (await refreshAccessToken()) {
+        throw new Error("登录已刷新，请重新发送");
+      }
+      showAuth();
+      return;
+    }
     if (!response.ok) {
       const text = await response.text().catch(() => "");
       let msg = text;
@@ -333,6 +445,12 @@ async function sendRagChat() {
     }
   } catch (err) {
     appendMessage("assistant", "抱歉，回复失败: " + err.message);
+  } finally {
+    state.pending.delete("chat");
+    input.disabled = false;
+    button.disabled = false;
+    button.classList.remove("is-loading");
+    input.focus();
   }
 }
 
@@ -344,10 +462,10 @@ async function loadDocuments() {
     $("#docList").innerHTML = docs.length
       ? docs.map(doc => `
           <article class="list-item">
-            <h3>${doc.title}</h3>
-            <p>${doc.fileType} · ${doc.chunkCount} 块 · ${doc.status === "READY" ? "就绪" : doc.status}</p>
+            <h3>${escapeHtml(doc.title)}</h3>
+            <p>${escapeHtml(doc.fileType)} · ${doc.chunkCount} 块 · ${doc.status === "READY" ? "就绪" : escapeHtml(doc.status)}</p>
             <div class="meta-row">
-              <span class="tag">${doc.status === "READY" ? "就绪" : doc.status}</span>
+              <span class="tag">${doc.status === "READY" ? "就绪" : escapeHtml(doc.status)}</span>
               <span class="tag low">${doc.createdAt ? doc.createdAt.substring(0, 10) : ""}</span>
               <button class="text-button" data-delete-doc="${doc.id}"
                 style="color:var(--red);font-size:12px;">删除</button>
@@ -381,6 +499,9 @@ async function loadDocuments() {
 
 async function uploadDocument(file) {
   if (!file) return;
+  if (state.pending.has("upload-doc")) return;
+  state.pending.add("upload-doc");
+  $("#docUploadArea").classList.add("is-loading");
   $("#docUploadStatus").textContent = "上传处理中...";
   try {
     const formData = new FormData();
@@ -406,6 +527,9 @@ async function uploadDocument(file) {
     await loadDocuments();
   } catch (err) {
     $("#docUploadStatus").textContent = "上传失败: " + err.message;
+  } finally {
+    state.pending.delete("upload-doc");
+    $("#docUploadArea").classList.remove("is-loading");
   }
 }
 
@@ -454,6 +578,8 @@ async function loadMakeupSources() {
 }
 
 async function loadMakeup() {
+  const button = $("#makeupBtn");
+  if (state.pending.has("makeup")) return;
   const box = $("#makeupBox");
 
   const noteIds = [];
@@ -466,7 +592,9 @@ async function loadMakeup() {
 
   box.innerHTML = "<strong>生成中...</strong><br><br><span id='makeupStream'></span>";
 
-  try {
+  await withButtonLoading(button, "生成中...", async () => {
+    state.pending.add("makeup");
+    try {
     const response = await fetch("/api/v1/ai/makeup/stream", {
       method: "POST",
       headers: {
@@ -491,7 +619,10 @@ async function loadMakeup() {
     }
   } catch (err) {
     box.innerHTML = "<strong>补课包生成失败</strong><br>" + err.message;
-  }
+    } finally {
+      state.pending.delete("makeup");
+    }
+  });
 }
 
 async function loadReport() {
@@ -503,14 +634,14 @@ async function loadReport() {
       <div class="report-cell"><strong>${report.completedTasks}</strong><span>完成 DDL</span></div>
     </div>
     <div class="item-list">
-      ${report.highlights.map((item) => `<article class="list-item"><h3>${item}</h3></article>`).join("")}
-      <article class="list-item"><p>${report.message}</p></article>
+      ${report.highlights.map((item) => `<article class="list-item"><h3>${escapeHtml(item)}</h3></article>`).join("")}
+      <article class="list-item"><p>${escapeHtml(report.message)}</p></article>
     </div>
   `;
 }
 
 function empty(text) {
-  return `<article class="list-item"><p>${text}</p></article>`;
+  return `<article class="list-item"><p>${escapeHtml(text)}</p></article>`;
 }
 
 // ── Image upload ──────────────────────────────────────
