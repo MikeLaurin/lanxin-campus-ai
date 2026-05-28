@@ -95,13 +95,28 @@ public class AppController {
 
     @GetMapping("/notes")
     public List<NoteDto> notes(@RequestHeader("Authorization") String authHeader,
-                               @RequestParam(required = false) @Size(max = 80) String keyword) {
+                               @RequestParam(required = false) @Size(max = 80) String keyword,
+                               @RequestParam(required = false) @Size(max = 200) String folder) {
         long userId = auth.getUserId(authHeader);
         keyword = InputSanitizer.clean(keyword, 80);
+        folder = InputSanitizer.clean(folder, 200);
         if (keyword != null && !keyword.isBlank()) {
             return noteRepo.searchByUser(userId, keyword).stream().map(NoteDto::from).toList();
         }
+        if (folder != null && !folder.isBlank()) {
+            if (folder.endsWith("/")) {
+                return noteRepo.findByUserIdAndFolderPathPrefix(userId, folder).stream().map(NoteDto::from).toList();
+            }
+            return noteRepo.findByUserIdAndFolderPath(userId, folder).stream().map(NoteDto::from).toList();
+        }
         return noteRepo.findByUserIdOrderByUpdatedAtDesc(userId).stream().map(NoteDto::from).toList();
+    }
+
+    @GetMapping("/notes/folders")
+    public List<Map<String, Object>> noteFolders(@RequestHeader("Authorization") String authHeader) {
+        long userId = auth.getUserId(authHeader);
+        List<String> paths = noteRepo.findDistinctFolderPathsByUserId(userId);
+        return buildFolderTree(paths);
     }
 
     @PostMapping("/notes")
@@ -110,8 +125,14 @@ public class AppController {
         Note note = buildNote(request);
         note.setUserId(auth.getUserId(authHeader));
         note = noteRepo.save(note);
-        note.setRagDocumentId(ragService.indexNote(note));
-        return NoteDto.from(noteRepo.save(note));
+        try {
+            note.setRagDocumentId(ragService.indexNote(note));
+            note = noteRepo.save(note);
+        } catch (Exception e) {
+            // RAG indexing failed but note is already saved — log and continue
+            System.err.println("[RAG] Failed to index note " + note.getId() + ": " + e.getMessage());
+        }
+        return NoteDto.from(note);
     }
 
     @GetMapping("/notes/{id}")
@@ -131,6 +152,7 @@ public class AppController {
         return noteRepo.findById(id).filter(n -> n.getUserId() == userId).map(note -> {
             note.setTitle(first(InputSanitizer.nullable(request.title(), 120), note.getTitle()));
             note.setCourse(first(InputSanitizer.nullable(request.course(), 80), note.getCourse()));
+            note.setFolderPath(first(InputSanitizer.nullable(request.folderPath(), 200), note.getFolderPath()));
             note.setRawText(first(InputSanitizer.nullable(request.rawText(), 20_000), note.getRawText()));
             note.setSummary(first(InputSanitizer.nullable(request.summary(), 4_000), note.getSummary()));
             if (request.keyPoints() != null) note.setKeyPoints(InputSanitizer.cleanList(request.keyPoints(), 200, 20));
@@ -173,8 +195,13 @@ public class AppController {
             Note note = buildNote(req);
             note.setUserId(userId);
             note = noteRepo.save(note);
-            note.setRagDocumentId(ragService.indexNote(note));
-            return NoteDto.from(noteRepo.save(note));
+            try {
+                note.setRagDocumentId(ragService.indexNote(note));
+                note = noteRepo.save(note);
+            } catch (Exception e) {
+                System.err.println("[RAG] Failed to index batch note " + note.getId() + ": " + e.getMessage());
+            }
+            return NoteDto.from(note);
         }).toList();
         return Map.of("synced", saved.size(), "items", saved);
     }
@@ -262,8 +289,13 @@ public class AppController {
         ));
         note.setUserId(auth.getUserId(authHeader));
         note = noteRepo.save(note);
-        note.setRagDocumentId(ragService.indexNote(note));
-        return NoteDto.from(noteRepo.save(note));
+        try {
+            note.setRagDocumentId(ragService.indexNote(note));
+            note = noteRepo.save(note);
+        } catch (Exception e) {
+            System.err.println("[RAG] Failed to index processed note " + note.getId() + ": " + e.getMessage());
+        }
+        return NoteDto.from(note);
     }
 
     @PostMapping("/ai/note/process-image")
@@ -281,8 +313,13 @@ public class AppController {
         Note note = ai.processImageNote(bytes, mimeType);
         note.setUserId(auth.getUserId(authHeader));
         note = noteRepo.save(note);
-        note.setRagDocumentId(ragService.indexNote(note));
-        return NoteDto.from(noteRepo.save(note));
+        try {
+            note.setRagDocumentId(ragService.indexNote(note));
+            note = noteRepo.save(note);
+        } catch (Exception e) {
+            System.err.println("[RAG] Failed to index image note " + note.getId() + ": " + e.getMessage());
+        }
+        return NoteDto.from(note);
     }
 
     @PostMapping("/ai/note/mindmap")
@@ -319,6 +356,16 @@ public class AppController {
         return ai.makeupPackageStream(userId, noteIds, documentIds);
     }
 
+    @PostMapping(value = "/ai/makeup/chat/stream", produces = "text/plain;charset=UTF-8")
+    public StreamingResponseBody makeupChatStream(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @Valid @RequestBody MakeupChatRequest request) {
+        Long userId = getUserIdOrNull(authHeader);
+        String makeupContent = InputSanitizer.clean(request.makeupContent(), 50_000);
+        String message = InputSanitizer.clean(request.message(), 4_000);
+        return ai.makeupChatStream(userId, makeupContent, message);
+    }
+
     @PostMapping("/ai/chat")
     public Map<String, Object> chat(@RequestHeader(value = "Authorization", required = false) String authHeader,
                                     @Valid @RequestBody ChatRequest request) {
@@ -350,6 +397,68 @@ public class AppController {
 
     // ── RAG ────────────────────────────────────────────────
 
+    @PostMapping("/rag/documents/extract")
+    public Map<String, Object> extractDocument(
+            @RequestHeader("Authorization") String authHeader,
+            @RequestParam("file") MultipartFile file) throws java.io.IOException {
+
+        auth.getUserId(authHeader);
+
+        if (file.isEmpty()) {
+            throw new IllegalArgumentException("文件为空");
+        }
+
+        String originalFilename = InputSanitizer.clean(file.getOriginalFilename(), 180);
+        String fileType = detectFileType(originalFilename);
+        if (!"PDF".equals(fileType) && !"TXT".equals(fileType) && !"DOCX".equals(fileType)) {
+            throw new IllegalArgumentException("仅支持 PDF、TXT 和 DOCX 文件");
+        }
+
+        long maxSize = 20 * 1024 * 1024;
+        if (file.getSize() > maxSize) {
+            throw new IllegalArgumentException("文件过大，最大支持 20MB");
+        }
+
+        String fullText = ragService.extractText(originalFilename, fileType, file.getInputStream());
+        String title = originalFilename != null && !originalFilename.isBlank() ? originalFilename : "未命名文档";
+
+        return Map.of(
+                "title", title,
+                "fileType", fileType,
+                "fileSize", file.getSize(),
+                "fullText", fullText
+        );
+    }
+
+    public record IngestTextRequest(
+            @NotBlank String title,
+            @NotBlank String originalFilename,
+            @NotBlank String fileType,
+            @NotBlank String fullText
+    ) {}
+
+    @PostMapping("/rag/documents/ingest-text")
+    public Map<String, Object> ingestText(
+            @RequestHeader("Authorization") String authHeader,
+            @Valid @RequestBody IngestTextRequest request) {
+
+        long userId = auth.getUserId(authHeader);
+        Document doc = ragService.ingestText(userId,
+                InputSanitizer.clean(request.title(), 180),
+                InputSanitizer.clean(request.originalFilename(), 180),
+                request.fileType(),
+                request.fullText());
+
+        return Map.of(
+                "id", doc.getId(),
+                "title", doc.getTitle(),
+                "fileType", doc.getFileType(),
+                "chunkCount", doc.getChunkCount(),
+                "status", doc.getStatus(),
+                "errorMessage", doc.getErrorMessage() != null ? doc.getErrorMessage() : ""
+        );
+    }
+
     @PostMapping("/rag/documents")
     public Map<String, Object> uploadDocument(
             @RequestHeader("Authorization") String authHeader,
@@ -367,8 +476,8 @@ public class AppController {
 
         String originalFilename = InputSanitizer.clean(file.getOriginalFilename(), 180);
         String fileType = detectFileType(originalFilename);
-        if (!"PDF".equals(fileType) && !"TXT".equals(fileType)) {
-            throw new IllegalArgumentException("仅支持 PDF 和 TXT 文件");
+        if (!"PDF".equals(fileType) && !"TXT".equals(fileType) && !"DOCX".equals(fileType)) {
+            throw new IllegalArgumentException("仅支持 PDF、TXT 和 DOCX 文件");
         }
 
         long maxSize = 20 * 1024 * 1024;
@@ -506,6 +615,7 @@ public class AppController {
         Note note = new Note();
         note.setTitle(InputSanitizer.clean(request.title(), 120));
         note.setCourse(InputSanitizer.clean(first(request.course(), "专业课程"), 80));
+        note.setFolderPath(InputSanitizer.clean(request.folderPath(), 200));
         note.setRawText(InputSanitizer.clean(request.rawText(), 20_000));
         note.setSummary(InputSanitizer.clean(request.summary(), 4_000));
         note.setKeyPoints(InputSanitizer.cleanList(request.keyPoints(), 200, 20));
@@ -541,7 +651,39 @@ public class AppController {
         if (lower.endsWith(".pdf")) return "PDF";
         if (lower.endsWith(".txt")) return "TXT";
         if (lower.endsWith(".md")) return "TXT";
+        if (lower.endsWith(".docx")) return "DOCX";
         return "UNKNOWN";
+    }
+
+    private List<Map<String, Object>> buildFolderTree(List<String> paths) {
+        Map<String, Map<String, Object>> nodeMap = new java.util.LinkedHashMap<>();
+        for (String path : paths) {
+            if (path == null || path.isBlank()) continue;
+            String[] parts = path.split("/");
+            StringBuilder currentPath = new StringBuilder();
+            for (String part : parts) {
+                if (part.isBlank()) continue;
+                String prefix = currentPath.toString();
+                currentPath.append(currentPath.length() > 0 ? "/" : "").append(part);
+                String fullPath = currentPath.toString();
+                nodeMap.putIfAbsent(fullPath, new java.util.LinkedHashMap<>());
+                Map<String, Object> node = nodeMap.get(fullPath);
+                node.put("name", part);
+                node.put("path", fullPath);
+                node.putIfAbsent("children", new java.util.ArrayList<>());
+                if (!prefix.isEmpty() && nodeMap.containsKey(prefix)) {
+                    @SuppressWarnings("unchecked")
+                    java.util.List<Map<String, Object>> siblings = (java.util.List<Map<String, Object>>) nodeMap.get(prefix).get("children");
+                    boolean exists = siblings.stream().anyMatch(c -> fullPath.equals(c.get("path")));
+                    if (!exists) {
+                        siblings.add(node);
+                    }
+                }
+            }
+        }
+        return nodeMap.values().stream()
+                .filter(n -> !((String) n.get("path")).contains("/"))
+                .toList();
     }
 
     public record LoginRequest(
@@ -573,9 +715,15 @@ public class AppController {
 
     public record SourceSelectionRequest(List<Long> noteIds, List<Long> documentIds) {}
 
+    public record MakeupChatRequest(
+            @NotBlank @Size(max = 50_000) String makeupContent,
+            @NotBlank @Size(max = 4_000) String message
+    ) {}
+
     public record NoteRequest(
             @NotBlank @Size(max = 120) String title,
             @Size(max = 80) String course,
+            @Size(max = 200) String folderPath,
             @Size(max = 20_000) String rawText,
             @Size(max = 4_000) String summary,
             List<String> keyPoints,

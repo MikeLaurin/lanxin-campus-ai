@@ -21,7 +21,8 @@ import java.util.List;
 @Table(name = "notes", indexes = {
         @Index(name = "idx_notes_user_updated", columnList = "userId, updatedAt"),
         @Index(name = "idx_notes_user_created", columnList = "userId, createdAt"),
-        @Index(name = "idx_notes_user_course", columnList = "userId, course")
+        @Index(name = "idx_notes_user_course", columnList = "userId, course"),
+        @Index(name = "idx_notes_user_folder", columnList = "userId, folderPath")
 })
 public class Note {
     @Id
@@ -35,6 +36,8 @@ public class Note {
     private String title;
 
     private String course;
+
+    private String folderPath;
 
     @Column(columnDefinition = "TEXT")
     private String rawText;
@@ -94,6 +97,9 @@ public class Note {
 
     public String getCourse() { return course; }
     public void setCourse(String course) { this.course = course; }
+
+    public String getFolderPath() { return folderPath; }
+    public void setFolderPath(String folderPath) { this.folderPath = folderPath; }
 
     public String getRawText() { return rawText; }
     public void setRawText(String rawText) { this.rawText = rawText; }

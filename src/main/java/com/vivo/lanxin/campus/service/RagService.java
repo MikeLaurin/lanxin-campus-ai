@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -23,6 +24,13 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Scanner;
 import java.util.stream.Collectors;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import org.w3c.dom.Element;
+import org.w3c.dom.NodeList;
+import org.xml.sax.SAXException;
 
 @Service
 public class RagService {
@@ -78,6 +86,59 @@ public class RagService {
 
     public String extractTextFile(InputStream stream) throws IOException {
         return new String(stream.readAllBytes(), StandardCharsets.UTF_8).trim();
+    }
+
+    public String extractDocxText(InputStream stream) throws IOException {
+        try (ZipInputStream zis = new ZipInputStream(stream)) {
+            ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                if ("word/document.xml".equals(entry.getName())) {
+                    // Read the XML content from the ZIP entry into a byte array
+                    java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                    byte[] buf = new byte[4096];
+                    int n;
+                    while ((n = zis.read(buf)) != -1) {
+                        baos.write(buf, 0, n);
+                    }
+                    byte[] xmlBytes = baos.toByteArray();
+
+                    try {
+                        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+                        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+                        factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+                        factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+                        factory.setNamespaceAware(true);
+                        org.w3c.dom.Document doc = factory.newDocumentBuilder()
+                                .parse(new java.io.ByteArrayInputStream(xmlBytes));
+
+                        StringBuilder sb = new StringBuilder();
+                        NodeList paraNodes = doc.getElementsByTagNameNS(
+                                "http://schemas.openxmlformats.org/wordprocessingml/2006/main", "p");
+                        for (int p = 0; p < paraNodes.getLength(); p++) {
+                            Element para = (Element) paraNodes.item(p);
+                            NodeList texts = para.getElementsByTagNameNS(
+                                    "http://schemas.openxmlformats.org/wordprocessingml/2006/main", "t");
+                            StringBuilder paraText = new StringBuilder();
+                            for (int t = 0; t < texts.getLength(); t++) {
+                                String text = texts.item(t).getTextContent();
+                                if (text != null) {
+                                    paraText.append(text);
+                                }
+                            }
+                            String line = paraText.toString().trim();
+                            if (!line.isEmpty()) {
+                                sb.append(line).append("\n\n");
+                            }
+                        }
+                        return sb.toString().trim();
+                    } catch (ParserConfigurationException | SAXException e) {
+                        throw new IOException("Failed to parse DOCX XML", e);
+                    }
+                }
+                zis.closeEntry();
+            }
+        }
+        return "";
     }
 
     // ── Chunking ────────────────────────────────────────────
@@ -193,84 +254,98 @@ public class RagService {
 
     // ── Ingestion Pipeline ──────────────────────────────────
 
+    /** Extract text from a file without saving to DB. */
+    public String extractText(String originalFilename, String fileType, InputStream fileStream) throws IOException {
+        if ("PDF".equalsIgnoreCase(fileType)) {
+            return extractPdfText(fileStream);
+        } else if ("DOCX".equalsIgnoreCase(fileType)) {
+            return extractDocxText(fileStream);
+        } else {
+            return extractTextFile(fileStream);
+        }
+    }
+
+    /** Ingest pre-extracted text into the knowledge base. */
+    public Document ingestText(long userId, String title, String originalFilename,
+                                String fileType, String fullText) {
+        if (fullText.isBlank()) {
+            throw new IllegalArgumentException("文档内容为空");
+        }
+        return doIngest(userId, title, originalFilename, fileType, fullText);
+    }
+
     public Document ingestDocument(long userId, String title, String originalFilename,
                                     String fileType, InputStream fileStream) {
         try {
             System.out.println("[RagService] Starting text extraction for: " + originalFilename);
-            String fullText;
-            if ("PDF".equalsIgnoreCase(fileType)) {
-                fullText = extractPdfText(fileStream);
-            } else {
-                fullText = extractTextFile(fileStream);
-            }
+            String fullText = extractText(originalFilename, fileType, fileStream);
             System.out.println("[RagService] Text extracted, length: " + fullText.length());
-
             if (fullText.isBlank()) {
                 throw new IOException("文档内容为空或无法提取文字");
             }
-
-            System.out.println("[RagService] Chunking text...");
-            List<String> chunks = chunkText(fullText);
-            fullText = null;
-            System.out.println("[RagService] Chunk count: " + chunks.size());
-
-            if (chunks.isEmpty()) {
-                throw new IOException("文档分块后无有效内容");
-            }
-
-            Document doc = new Document();
-            doc.setUserId(userId);
-            doc.setTitle(title);
-            doc.setOriginalFilename(originalFilename);
-            doc.setFileType(fileType.toUpperCase());
-            doc.setStatus("PROCESSING");
-            doc.setFileSize(0);
-            documentRepo.save(doc);
-
-            int totalChunks = chunks.size();
-            for (int i = 0; i < totalChunks; i += EMBEDDING_BATCH_SIZE) {
-                int batchEnd = Math.min(i + EMBEDDING_BATCH_SIZE, totalChunks);
-                List<DocumentChunk> batch = new ArrayList<>(batchEnd - i);
-
-                for (int j = i; j < batchEnd; j++) {
-                    String chunkText = chunks.get(j);
-                    DocumentChunk chunk = new DocumentChunk();
-                    chunk.setUserId(userId);
-                    chunk.setDocumentId(doc.getId());
-                    chunk.setChunkIndex(j);
-                    chunk.setContent(chunkText);
-                    chunk.setCharCount(chunkText.length());
-                    lanxin.embedding(chunkText).ifPresent(embedding ->
-                            chunk.setEmbedding(serializeEmbedding(embedding)));
-                    batch.add(chunk);
-                }
-
-                System.out.println("[RagService] Saving chunks " + (i + 1) + "-" + batchEnd + " / " + totalChunks);
-                chunkRepo.saveAll(batch);
-                batch.clear();
-            }
-
-            doc.setChunkCount(totalChunks);
-            doc.setStatus("READY");
-            documentRepo.save(doc);
-
-            return doc;
-
+            return doIngest(userId, title, originalFilename, fileType, fullText);
         } catch (Exception e) {
-            System.err.println("[RagService] Ingestion failed: " + e.getMessage());
-            try {
-                Document doc = new Document();
-                doc.setUserId(userId);
-                doc.setTitle(title);
-                doc.setOriginalFilename(originalFilename);
-                doc.setFileType(fileType.toUpperCase());
-                doc.setStatus("FAILED");
-                doc.setErrorMessage(e.getMessage());
-                return documentRepo.save(doc);
-            } catch (Exception ex) {
-                throw new RuntimeException("Failed to save failed document", e);
+            if (e instanceof IOException || e instanceof IllegalArgumentException) {
+                System.err.println("[RagService] Ingestion failed: " + e.getMessage());
+                try {
+                    Document doc = new Document();
+                    doc.setUserId(userId);
+                    doc.setTitle(title);
+                    doc.setOriginalFilename(originalFilename);
+                    doc.setFileType(fileType.toUpperCase());
+                    doc.setStatus("FAILED");
+                    doc.setErrorMessage(e.getMessage());
+                    return documentRepo.save(doc);
+                } catch (Exception ex) {
+                    throw new RuntimeException("Failed to save failed document", e);
+                }
             }
+            throw new RuntimeException("Unexpected error during ingestion", e);
         }
+    }
+
+    private Document doIngest(long userId, String title, String originalFilename,
+                               String fileType, String fullText) {
+        List<String> chunks = chunkText(fullText);
+        if (chunks.isEmpty()) {
+            throw new IllegalArgumentException("文档分块后无有效内容");
+        }
+
+        Document doc = new Document();
+        doc.setUserId(userId);
+        doc.setTitle(title);
+        doc.setOriginalFilename(originalFilename);
+        doc.setFileType(fileType.toUpperCase());
+        doc.setStatus("PROCESSING");
+        doc.setFileSize(0);
+        documentRepo.save(doc);
+
+        int totalChunks = chunks.size();
+        for (int i = 0; i < totalChunks; i += EMBEDDING_BATCH_SIZE) {
+            int batchEnd = Math.min(i + EMBEDDING_BATCH_SIZE, totalChunks);
+            List<DocumentChunk> batch = new ArrayList<>(batchEnd - i);
+
+            for (int j = i; j < batchEnd; j++) {
+                String chunkText = chunks.get(j);
+                DocumentChunk chunk = new DocumentChunk();
+                chunk.setUserId(userId);
+                chunk.setDocumentId(doc.getId());
+                chunk.setChunkIndex(j);
+                chunk.setContent(chunkText);
+                chunk.setCharCount(chunkText.length());
+                lanxin.embedding(chunkText).ifPresent(embedding ->
+                        chunk.setEmbedding(serializeEmbedding(embedding)));
+                batch.add(chunk);
+            }
+
+            System.out.println("[RagService] Saving chunks " + (i + 1) + "-" + batchEnd + " / " + totalChunks);
+            chunkRepo.saveAll(batch);
+            batch.clear();
+        }
+
+        doc.setChunkCount(totalChunks);
+        doc.setStatus("READY");
+        return documentRepo.save(doc);
     }
 
     // ── Retrieval ───────────────────────────────────────────

@@ -343,6 +343,50 @@ public class AiMockService {
         });
     }
 
+    public StreamingResponseBody makeupChatStream(Long userId, String makeupContent, String message) {
+        if (message == null || message.isBlank()) {
+            final String fallback = "请告诉我你想进一步了解补课包中的哪个知识点。";
+            return outputStream -> {
+                try {
+                    outputStream.write(fallback.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    outputStream.flush();
+                } catch (java.io.IOException ignored) {}
+            };
+        }
+
+        String systemPrompt = "你是蓝心校园 AI 管家小蓝，一个友好的学习助手。"
+                + "以下是一份补课包（学习资料）的完整内容。用户会针对这份资料提出追问。"
+                + "请结合资料内容回答用户的问题。如果问题与资料无关，可以基于你的知识补充回答。"
+                + "用中文自然交流，语气亲切像朋友，用Markdown格式输出。";
+
+        String userPrompt = "=== 补课包内容 ===\n"
+                + makeupContent + "\n\n"
+                + "用户追问：" + message + "\n\n"
+                + "请结合以上补课包内容回答用户的追问。";
+
+        final String finalSystemPrompt = systemPrompt;
+        final String finalUserPrompt = userPrompt;
+        return outputStream -> {
+            try {
+                lanxin.streamChat(finalSystemPrompt, finalUserPrompt, text -> {
+                    try {
+                        outputStream.write(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        outputStream.flush();
+                    } catch (java.io.IOException ignored) {
+                        // client disconnected
+                    }
+                });
+            } catch (Exception e) {
+                System.err.println("[AiMockService] makeupChatStream error: " + e.getMessage());
+                try {
+                    String errorMsg = "\n\n抱歉，AI 服务暂时不可用，请稍后重试。";
+                    outputStream.write(errorMsg.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    outputStream.flush();
+                } catch (java.io.IOException ignored) {}
+            }
+        };
+    }
+
     public StreamingResponseBody chatStream(Long userId, String message) {
         String systemPrompt;
         String userPrompt;

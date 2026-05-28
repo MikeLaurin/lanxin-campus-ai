@@ -126,86 +126,135 @@ src/test/resources/application.yml
 
 ### 用户与认证
 
-- 首次启动自动创建 `demo/demo123`
-- 密码使用 BCrypt 存储
+- 首次启动自动创建 `demo/demo123`，密码 BCrypt 加密
 - 登录和注册返回 `token`、`refreshToken`、`expiresAt`
-- `/api/v1/user/refresh` 支持刷新 access token
-- `AuthService` 不再保存服务端 UUID token，认证状态由 JWT 自包含
-- 用户资料有 5 分钟本地缓存，后续可替换为 Redis
+- `JwtService` 自实现 HMAC-SHA256 JWT，access token 默认 120 分钟，refresh token 7 天
+- `/api/v1/user/refresh` 支持无感续期，前端所有 API 遇 401 自动 refresh 后重试
+- 用户资料有 5 分钟本地缓存（ConcurrentHashMap），后续可替换为 Redis
 
-注意：`logout` 对 JWT 是客户端语义，后端不维护黑名单。正式场景如需强制失效，应引入 Redis/数据库 token blacklist 或 token version。
+注意：`logout` 对 JWT 是客户端语义，后端不维护黑名单。正式场景需引入 Redis token blacklist 或 token version。
+
+### 课堂笔记
+
+三种创建方式：
+- **手写笔记**：标题、课程、文件夹路径、标签、正文，支持「预览」/「原文」双模式
+- **拍照 AI 识别**：支持拖拽/选择图片，前端 `compressImage()` 压缩（1920px + 0.7 质量），调用 `/ai/note/process-image` AI 识别，返回标题、正文、标签，用户编辑后保存
+- **上传文档提取**：支持 PDF/TXT/DOCX（最大 20MB），调用 `/rag/documents/extract` 提取文本，可保存为笔记或加入知识库
+
+笔记管理：
+- 多级文件夹树：横向 + 纵向滚动条，长路径完整展示，节点折叠/展开
+- 搜索：关键词搜索，按文件夹路径筛选
+- 编辑/删除：编辑弹窗支持 AI 结构化（提取要点、公式、标签、思维导图），删除需二次确认
+- 图片灯箱：上传图片点击放大预览
+- DTO 输出：`NoteDto` 不暴露 `userId`、`ragDocumentId`
+
+### DDL 管理
+
+- 手动创建：标题、课程、截止日期、优先级（high/medium/low）
+- AI 文本解析：输入自然语言作业要求 → `/reminders/parse` → 自动提取标题、日期、优先级
+- 今日待办：窗口从 1 天延长至 3 天，按截止日期排列
+- 优先级排序、标记完成、删除
+- 今日 DDL 列表和紧急任务计数展示在首页仪表盘
+
+### AI 对话（小蓝聊天）
+
+- 悬浮球入口：拖拽定位 + 松手吸附边缘 + 提示气泡 + Ctrl+K 快捷键
+- 聊天抽屉双 Tab：小蓝聊天 / 逃课补课包，各带独立输入区和消息区
+- RAG 开关：勾选后将在已上传知识库中检索相关内容注入 prompt
+- 全平台流式输出（SSE）：`StreamingResponseBody` + `text/plain;charset=UTF-8`
+- 流式完成后调用 `renderMarkdown()` 渲染 Markdown，typing 指示器
+- 401 处理：流式 401 刷新后提示重发，避免重复提交
+
+### RAG 知识库
+
+文档生命周期：
+1. 上传：`POST /rag/documents`，校验类型和大小（20MB），状态跟踪（PROCESSING → READY / FAILED）
+2. 提取：`POST /rag/documents/extract`，仅提取文本不入库，前端预览后可选择保存为笔记或加入知识库
+3. 入库：`POST /rag/documents/ingest-text`，已提取文本直接写入
+4. 列表：`GET /rag/documents`，按用户过滤，显示状态、分块数、日期
+5. 删除：`DELETE /rag/documents/{id}`，级联删除 chunks
+
+文档处理：
+- PDF 使用系统 `pdftotext` 提取（Git for Windows / poppler-utils），TXT/MD 直接读取
+- 按 ~1000 字切片，~200 字重叠，批量保存（5 个/批）
+- embedding 向量化：支持独立 embedding 模型配置，调用 `/embeddings` 生成向量并序列化存储
+- 检索：向量余弦相似度优先，embedding 不可用时关键词匹配兜底
+
+笔记联动：
+- 创建/更新笔记时调用 `indexNote()` 自动写入 RAG，删除笔记时调用 `deleteNoteDocument()` 清理
+- `reindexNote()` 先删旧文档再重建，用于笔记更新场景（当前未包 try-catch，更新时可能抛异常）
+
+### 逃课补课包
+
+- 素材选择：勾选笔记和状态为 READY 的文档作为生成素材
+- 流式生成：`POST /ai/makeup/stream`，SSE 流式返回
+- 增强 prompt：要求详细的知识点解析（概念解释、常见误区）、复习方法（时间分配、验收标准）、自测题目（含答案解析）
+- 追问聊天：生成后 `POST /ai/makeup/chat/stream` 对补课包内容流式提问
+- 保存为笔记：自定义弹窗 → 填写标题、文件夹路径、标签 → Markdown 原文预览 → `POST /notes` 保存
+
+### 学习周报
+
+- `GET /reports/weekly`：汇总笔记数、专注时长、完成 DDL、学习亮点、AI 建议
+- 统计日连续学习天数通过 `findStudyDatesByUserId()` 计算
+
+### 前端交互体验
+
+"温暖学伴"设计风格：
+- 视觉：浮动光斑背景（3 个光斑轨道运动）、流动渐变 Hero、毛玻璃面板（`backdrop-filter`）、emoji 图标全方案
+- 18+ CSS 动画：弹簧物理过渡（`cubic-bezier`）、按钮波纹（`::after` pseudo）、呼吸发光 CTA、弹跳导航栏、消息滑入、抽屉展开
+- JS 微交互：
+  - 按钮波纹 `addRipple()`：点击时从鼠标位置扩散圆形波纹
+  - 数字滚动 `animateCounter()`：700ms easeOutCubic 动画
+  - 打字指示器：三圆点弹跳动画
+  - Toast 消息：底部滑入，2.2s 自动消失
+  - 悬浮球：`pointerdown/pointermove/pointerup` 拖拽 + 松手吸附左右边缘 + 位置 localStorage 持久化
+- 内容预览切换：`switchContentPreview()` 在「预览」（`renderMarkdown()` 渲染）和「原文」（textarea 编辑）间切换
+- Markdown 渲染：`renderMarkdown()` 处理 #标题、**加粗**、- 列表、`---` 分割线、段落、换行
+- LaTeX 数学公式：KaTeX 渲染 `$$...$$` 显示公式和 `$...$` 行内公式
+- 图片灯箱：点击预览图放大，Escape 关闭
+- 版本缓存：`styles.css?v=N` 和 `app.js?v=N` 控制前端缓存刷新
 
 ### AI 调用与错误处理
 
-- `LanxinApiClient.chat()`、`chatWithImage()`、`embedding()`、`streamChat()` 统一抛出 `AiServiceException`
-- AI HTTP 状态码会以 `aiStatus` 返回给前端
+- `LanxinApiClient` 四个核心方法：`chat()`、`chatWithImage()`、`embedding()`、`streamChat()`
+- 统一抛出 `AiServiceException extends ApiException`，携带 `provider`、`aiStatus`、HTTP 状态码
+- `GlobalExceptionHandler` 分层处理：AiServiceException → ApiException → IllegalArgumentException → MethodArgumentNotValidException → ConstraintViolationException → MissingRequestHeaderException → Exception
+- 流式端点 lambda 内异常无法被 `@RestControllerAdvice` 捕获，已在 `makeupChatStream()` 和 `chatWithRagStream()` 中加 try-catch 兜底
 - 未配置 API Key 时，部分流程走本地演示/降级逻辑
-- `GlobalExceptionHandler` 统一错误响应，不向前端暴露服务端堆栈
-
-统一错误格式示例：
-
-```json
-{
-  "timestamp": "2026-05-27T00:00:00Z",
-  "status": 503,
-  "code": "AI_SERVICE_UNAVAILABLE",
-  "error": "AI 服务调用失败，状态码：503",
-  "provider": "lanxin",
-  "aiStatus": 503
-}
-```
-
-### DTO 与数据隔离
-
-- `AppController` 对笔记和 DDL 返回 `NoteDto`、`ReminderDto`
-- 不再直接返回 JPA 实体给前端
-- DTO 不包含 `userId`、`ragDocumentId` 等内部字段
-- 查询、更新、删除均按当前 JWT 用户 ID 过滤
+- 超时配置：AI 调用 connect 60s + read 120s，Spring MVC 异步流 180s，`max_tokens=4096`
 
 ### 参数校验与输入处理
 
-- 登录、注册、笔记、DDL、聊天、补课包等请求体使用 Bean Validation
-- `InputSanitizer` 会去除脚本标签、HTML 标签和非法控制字符，并做长度截断
-- 前端 `escapeHtml()` 对动态内容做转义，避免用户输入直接进入 DOM
-- 数据访问使用 Spring Data JPA 参数绑定，没有手写 SQL 拼接
+- 登录、注册、笔记、DDL、聊天、补课包等请求体使用 Jakarta Bean Validation（`@Valid` + `@NotBlank`/`@Size`/`@Pattern`）
+- `InputSanitizer.clean()`：去 `<script>` 标签、HTML 标签、控制字符，trim 并截断到指定长度
+- `InputSanitizer.nullable()`：同 clean + 空字符串转 null
+- `InputSanitizer.cleanList()`：批量清洗 + 去空白 + 限条数
+- 前端 `escapeHtml()`：`&<>"` 转义，所有动态内容渲染前先转义
+- Spring Data JPA 参数绑定，无手写 SQL
 
 ### 速率限制
 
-`RateLimitInterceptor` 对敏感接口做 IP 级限流：
+`RateLimitInterceptor` 内存限流桶：
 
-- 登录/注册：每 IP 每分钟 10 次
-- AI、RAG、DDL 解析类接口：每 IP 每分钟 30 次
+| 接口 | 限制 |
+|------|------|
+| 登录/注册 | 10 次/IP/分钟 |
+| AI 对话、RAG、DDL 解析、补课包 | 30 次/IP/分钟 |
+| GET 查询类 | 不限 |
 
-当前限流桶存储在服务内存中，适合 MVP。多实例部署或长期运行建议迁移 Redis。
+读取 `X-Forwarded-For` 首个 IP，适合 MVP。多实例部署建议迁移 Redis。
 
 ### 数据库索引
 
-已为高频查询字段添加 JPA 索引：
+JPA 声明的复合索引：
 
-- `users.username`
-- `notes.userId + updatedAt`
-- `notes.userId + createdAt`
-- `notes.userId + course`
-- `reminders.userId + dueDate`
-- `reminders.userId + completed + dueDate`
-- `reminders.userId + priority`
-- `documents.userId + createdAt`
-- `documents.userId + status`
-- `document_chunks.documentId`
-- `document_chunks.userId`
+- `users.username`（唯一）
+- `notes`: `userId + updatedAt`、`userId + createdAt`、`userId + course`、`userId + folderPath`
+- `reminders`: `userId + dueDate`、`userId + completed + dueDate`、`userId + priority`
+- `documents`: `userId + createdAt`、`userId + status`
+- `document_chunks`: `documentId`、`userId`
 
-当前 `ddl-auto=update` 会让 Hibernate 自动维护演示库结构。正式环境建议改为 Flyway/Liquibase。
-
-### 前端体验
-
-- 登录/注册按钮有 loading 状态
-- AI 笔记生成、DDL 解析、聊天发送、文档上传、补课包生成有防重复点击
-- 普通 API 请求遇到 401 会先尝试 refresh token
-- 流式聊天 401 刷新后提示用户重新发送，避免重复提交消息
-- 文档上传区域 loading 时禁用交互
-- UI 采用 "温暖学伴" 设计风格：浮动光斑背景、流动渐变 Hero、毛玻璃面板、emoji 图标
-- 18+ CSS 动画：弹簧过渡、波纹反馈、呼吸发光、弹跳导航、打字指示器
-- JS 微交互：按钮水波纹、统计数字滚动动画、AI 回复等待指示器
+H2 文件数据库 `ddl-auto=update` 自动维护。正式环境改 Flyway/Liquibase + MySQL。
 
 ## RAG 流程
 
@@ -213,6 +262,18 @@ src/test/resources/application.yml
 
 ```text
 POST /api/v1/rag/documents
+```
+
+文档提取（仅提取文本，不入库）：
+
+```text
+POST /api/v1/rag/documents/extract
+```
+
+文本入库（提取后的内容直接写入知识库）：
+
+```text
+POST /api/v1/rag/documents/ingest-text
 ```
 
 处理流程：
@@ -298,15 +359,24 @@ Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
 
 - 用 `mvn spring-boot:run` 开发时，静态资源刷新浏览器即可看到改动。
 - 用 `java -jar` 运行时，静态资源来自 jar 包内部，修改前端后必须重新打包。
+- 前端缓存通过 `styles.css?v=N` 和 `app.js?v=N` 控制版本号，修改 JS/CSS 后需同步更新 `index.html` 中的引用。
 - 不要把真实 `LANXIN_API_KEY`、`APP_JWT_SECRET` 写入仓库。
-- 现有 JWT 没有服务端吊销机制，适合 MVP。正式上线需设计 token blacklist、用户 token version 或短 access token + Redis session。
-- 当前 IP 限流读取 `X-Forwarded-For` 的第一个 IP。部署在反向代理后要确保代理层正确覆盖该头，避免伪造。
-- `spring.mvc.async.request-timeout: 180000`（默认 30s 不足以支持流式长内容）
+- `LANXIN_EMBEDDING_MODEL` 可选，不配置时 RAG 自动使用关键词检索降级（不依赖 `/embeddings` 端点）。
+- 现有 JWT 没有服务端吊销机制，适合 MVP。正式上线需引入 Redis token blacklist 或 token version。
+- 当前 IP 限流读取 `X-Forwarded-For` 的第一个 IP。部署在反向代理后确保代理覆盖该头。
+- `spring.mvc.async.request-timeout: 180000`（默认 30s 不支持流式长内容）
+- AI 调用超时：`lanxin.connect-timeout: 60000`（连接），`lanxin.read-timeout: 120000`（读取流），API `max_tokens: 4096`
+- JVM 堆内存已配置 1GB（`-Xmx1024m`），大文件 embedding 时注意 OOM
+- 文档分块批量保存改为 5 个/批，避免大批量 embedding 内存溢出
 - 补课包 prompt 已优化，要求详细的知识点解析（含概念解释、误区）、复习方法（含时间分配、验收标准）、自测题目（含答案解析）
-- 前端已支持 Markdown 渲染（`renderMarkdown()` 函数），处理 #标题、**加粗**、列表等语法
-- 前端是浏览器演示页，后续迁移 vivo 快应用时，主要复用后端 API 和业务流程。
-- 前端图标使用 emoji（🏠📸📝⏰✨📊），新增图标时直接用 emoji，不再手写 CSS 图标类。
-- 按钮波纹效果（`addRipple()`）、统计数字滚动（`animateCounter()`）、打字指示器（`showTyping()/hideTyping()`）已实现在 app.js 中。
+- 前端 `renderMarkdown()` 支持 #标题、**加粗**、列表、`$$...$$` LaTeX 数学公式（KaTeX 渲染）
+- 前端是浏览器演示页，后续迁移 vivo 快应用时主要复用后端 API
+- 前端图标统一使用 emoji，不手写 CSS 图标类
+- 按钮波纹 `addRipple()`、数字滚动 `animateCounter()`、打字指示器 `showTyping()/hideTyping()` 已实现
+- 悬浮球定位持久化在 `localStorage.lanxin_bubble_pos`
+- 笔记文件夹树项使用 `width: fit-content; min-width: 100%` 实现长路径不截断
+- `StreamingResponseBody` lambda 内异常不会被 `@RestControllerAdvice` 捕获，流式方法内部需要独立 try-catch
+- 拍照识别的 `processImage` 端点在识别时就保存了笔记（含 RAG 索引），前端保存时先 DELETE 旧笔记再 POST 新笔记来去重
 
 ## 当前验证记录
 
@@ -316,6 +386,10 @@ Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
 - `node --check src/main/resources/static/app.js`：通过
 - 补课包详细输出 + Markdown 渲染 + 流式超时修复全链路验证通过
 - UI v3 动效升级：浮动光斑、流动渐变、弹簧动画、波纹反馈、数字滚动、打字指示器全链路验证通过
+- 聊天抽屉双Tab + 补课包追问聊天 + 保存为笔记弹窗全链路通过
+- 内容预览切换（预览/原文）全链路通过
+- 文件夹树横向 + 纵向滚动条验证通过
+- 文档上传保存为笔记截断修复 + 拍照保存去重修复验证通过
 
 测试覆盖：
 

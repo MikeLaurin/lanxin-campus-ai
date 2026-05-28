@@ -4,7 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>蓝心校园 AI 管家</title>
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=9">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
 </head>
 <body>
   <!-- Floating orbs -->
@@ -52,24 +54,22 @@
       <div style="display:flex;align-items:center;gap:8px;">
         <span id="userBadge" style="font-size:13px;color:var(--muted);"></span>
         <button class="text-button" id="logoutBtn" style="color:var(--muted);">退出</button>
-        <button class="icon-button" id="offlineToggle" aria-label="切换离线模式" title="切换离线模式">
-          <span class="signal-icon"></span>
-        </button>
       </div>
     </header>
 
     <section class="content">
+      <!-- Home Panel -->
       <div class="tab-panel active" data-panel="home">
         <div class="hero-band">
           <p>你的校园学习搭子，更懂你的 AI 管家</p>
           <div class="stats-grid" id="statsGrid"></div>
         </div>
         <div class="quick-actions">
-          <button class="primary-action" data-nav="capture">
-            📸 拍照笔记
+          <button class="primary-action" data-nav="notes">
+            笔记归档
           </button>
           <button class="secondary-action" data-nav="tasks">
-            ⏰ DDL 管理
+            DDL 管理
           </button>
         </div>
         <section class="section-block">
@@ -88,50 +88,40 @@
         </section>
       </div>
 
-      <div class="tab-panel" data-panel="capture">
-        <section class="section-block">
-          <div class="section-head">
-            <h2>课堂多模态智能笔记</h2>
-            <span class="status-pill" id="modeBadge">云端增强</span>
-          </div>
-          <div class="upload-area" id="uploadArea">
-            <div class="upload-placeholder" id="uploadPlaceholder">
-              <span style="font-size:36px;">📸</span>
-              <p>点击选择或拖拽课堂照片</p>
-              <p class="eyebrow">支持板书、PPT、课本页面</p>
-            </div>
-            <img id="imagePreview" class="image-preview" alt="预览" style="display:none;">
-            <input type="file" id="imageFile" accept="image/*" style="display:none;">
-          </div>
-          <div class="button-row">
-            <button class="primary-action" id="processImage">
-              <span class="spark-icon"></span>
-              AI 识别照片
-            </button>
-            <button class="secondary-action" id="cancelImage">重新选择</button>
-          </div>
-          <textarea id="noteInput" rows="6" placeholder="粘贴或输入拍到的板书/PPT内容，例如：数据结构 二叉树遍历 时间复杂度 O(n) 递归出口。"></textarea>
-          <div class="button-row">
-            <button class="primary-action" id="processNote">
-              <span class="spark-icon"></span>
-              AI 结构化
-            </button>
-            <button class="secondary-action" id="loadSample">示例内容</button>
-          </div>
-        </section>
-        <section class="section-block result-block" id="noteResult"></section>
-      </div>
-
+      <!-- Notes Panel — unified -->
       <div class="tab-panel" data-panel="notes">
-        <section class="section-block">
-          <div class="section-head">
-            <h2>笔记归档</h2>
-            <input class="search-input" id="noteSearch" placeholder="搜索课程/标签">
+        <div class="notes-toolbar">
+          <div class="notes-subtabs">
+            <button class="notes-subtab active" data-notes-tab="notes">笔记</button>
+            <button class="notes-subtab" data-notes-tab="knowledge">知识库</button>
           </div>
-          <div class="item-list" id="noteList"></div>
-        </section>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input class="search-input" id="noteSearch" placeholder="搜索笔记..." style="max-width:200px;">
+            <button class="primary-action" id="openCreateNote" style="min-height:40px;font-size:13px;white-space:nowrap;">+ 新建</button>
+          </div>
+        </div>
+        <!-- Notes sub-panel -->
+        <div class="notes-subpanel" id="notesSubpanel">
+          <div class="notes-layout">
+            <div class="folder-tree" id="folderTree">
+              <div class="folder-tree-item active" data-folder="">
+                <span class="folder-icon"></span>全部笔记
+              </div>
+            </div>
+            <div class="note-list-area" id="noteList"></div>
+          </div>
+        </div>
+        <!-- Knowledge base sub-panel -->
+        <div class="notes-subpanel" id="knowledgeSubpanel" style="display:none;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <h3 style="font-size:15px;margin:0;">已上传文档</h3>
+            <button class="text-button" id="refreshKnowledgeBase" style="color:var(--primary);">刷新</button>
+          </div>
+          <div id="knowledgeBaseList"></div>
+        </div>
       </div>
 
+      <!-- DDL Panel -->
       <div class="tab-panel" data-panel="tasks">
         <section class="section-block">
           <div class="section-head">
@@ -156,60 +146,7 @@
         </section>
       </div>
 
-      <div class="tab-panel" data-panel="ai">
-        <section class="section-block">
-          <div class="section-head">
-            <h2>知识库文档</h2>
-            <span class="status-pill" id="ragStatus">未启用</span>
-          </div>
-          <div class="upload-area" id="docUploadArea" style="min-height:80px;">
-            <div class="upload-placeholder" id="docUploadPlaceholder">
-              <p>上传 PDF / TXT 参考资料</p>
-              <p class="eyebrow">AI 将基于文档内容回答问题</p>
-            </div>
-            <input type="file" id="docFileInput" accept=".pdf,.txt,.md" style="display:none;">
-          </div>
-          <p id="docUploadStatus" style="font-size:13px;color:var(--muted);margin-top:6px;"></p>
-        </section>
-        <section class="section-block">
-          <div class="section-head">
-            <h2>已上传文档</h2>
-            <button class="text-button" id="refreshDocs">刷新</button>
-          </div>
-          <div class="item-list" id="docList"></div>
-        </section>
-        <section class="section-block">
-          <div class="section-head">
-            <h2>✨ 小蓝 AI 互动</h2>
-            <span class="status-pill">学习搭子</span>
-          </div>
-          <div class="chat-box" id="chatBox"></div>
-          <div class="chat-input">
-            <input id="chatInput" placeholder="问问小蓝：今晚怎么复习？">
-            <button class="icon-button filled" id="sendChat" aria-label="发送" title="发送">
-              <span class="send-icon"></span>
-            </button>
-          </div>
-          <div style="display:flex;align-items:center;gap:6px;margin-top:10px;">
-            <input type="checkbox" id="ragToggle" checked style="accent-color:var(--primary);width:16px;height:16px;">
-            <label for="ragToggle" style="font-size:13px;color:var(--muted);">基于知识库回答</label>
-          </div>
-        </section>
-        <section class="section-block">
-          <div class="section-head">
-            <h2>逃课补课包</h2>
-            <button class="text-button" id="makeupRefreshSources">刷新素材</button>
-          </div>
-          <p style="font-size:13px;color:var(--muted);margin-bottom:6px;">选择笔记或文档作为学习素材：</p>
-          <div id="makeupSources" class="item-list" style="max-height:180px;overflow-y:auto;"></div>
-          <button class="primary-action" id="makeupBtn" style="width:100%;margin-top:10px;">
-            <span class="spark-icon"></span>
-            生成补课包
-          </button>
-          <div id="makeupBox" class="compact-text" style="margin-top:10px;"></div>
-        </section>
-      </div>
-
+      <!-- Weekly Report Panel -->
       <div class="tab-panel" data-panel="report">
         <section class="section-block">
           <div class="section-head">
@@ -223,17 +160,302 @@
 
     <nav class="bottom-nav" aria-label="主导航">
       <button class="active" data-nav="home"><span>🏠</span><small>首页</small></button>
-      <button data-nav="capture"><span>📸</span><small>拍照</small></button>
       <button data-nav="notes"><span>📝</span><small>笔记</small></button>
       <button data-nav="tasks"><span>⏰</span><small>DDL</small></button>
-      <button data-nav="ai"><span>✨</span><small>小蓝</small></button>
       <button data-nav="report"><span>📊</span><small>周报</small></button>
     </nav>
   </main>
+
+  <!-- Floating Bubble — 小蓝 -->
+  <div class="floating-bubble" id="floatingBubble" aria-label="小蓝 AI 助手" title="小蓝 AI 助手">
+    ✨
+  </div>
+  <div class="bubble-tooltip" id="bubbleTooltip">hi，我是小蓝，点开可以和我聊天</div>
+
+  <!-- Chat Drawer -->
+  <div class="chat-drawer-overlay" id="chatDrawerOverlay"></div>
+  <div class="chat-drawer" id="chatDrawer">
+    <div class="chat-drawer-header">
+      <div class="chat-drawer-tabs">
+        <button class="chat-drawer-tab active" data-chat-tab="chat">小蓝聊天</button>
+        <button class="chat-drawer-tab" data-chat-tab="makeup">逃课补课包</button>
+      </div>
+      <button class="chat-drawer-close" id="closeChatDrawer">x</button>
+    </div>
+    <div class="chat-drawer-body">
+      <!-- Tab Panel: Chat -->
+      <div class="chat-tab-panel active" id="chatTabPanel">
+        <div class="chat-box" id="chatBox"></div>
+        <div class="chat-tab-footer">
+          <div class="rag-row">
+            <input type="checkbox" id="ragToggle" checked style="accent-color:var(--primary);width:15px;height:15px;">
+            <label for="ragToggle">基于知识库回答</label>
+          </div>
+          <div class="chat-input">
+            <input id="chatInput" placeholder="问问小蓝...">
+            <button class="icon-button filled" id="sendChat" aria-label="发送">
+              <span class="send-icon"></span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab Panel: Makeup -->
+      <div class="chat-tab-panel" id="makeupTabPanel">
+        <div class="makeup-panel">
+          <div class="makeup-sources-header">
+            <h3>选择素材来源</h3>
+            <button class="text-button" id="refreshMakeupSources" style="font-size:11px;color:var(--primary);">刷新</button>
+          </div>
+          <div class="makeup-sources" id="makeupSources"></div>
+          <button class="secondary-action" id="makeupBtn" style="width:100%;font-size:12px;min-height:36px;">
+            <span class="spark-icon"></span>生成补课包
+          </button>
+          <div class="makeup-result" id="makeupBox"></div>
+          <div class="makeup-actions" id="makeupActions" style="display:none;">
+            <button class="primary-action" id="saveMakeupAsNote" style="font-size:12px;min-height:34px;">保存为笔记</button>
+          </div>
+          <div class="makeup-chat-section" id="makeupChatSection" style="display:none;">
+            <div class="makeup-chat-box" id="makeupChatBox"></div>
+            <div class="chat-input">
+              <input id="makeupChatInput" placeholder="关于补课包，还想问什么？">
+              <button class="icon-button filled" id="sendMakeupChat" aria-label="发送">
+                <span class="send-icon"></span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create Note Modal -->
+  <div class="modal-overlay" id="createNoteOverlay">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>新建笔记</h2>
+        <button class="modal-close" id="closeCreateNote">x</button>
+      </div>
+      <div class="modal-body">
+        <div class="create-tabs" id="createTabs">
+          <button class="create-tab active" data-mode="write">
+            <span class="tab-emoji">✏️</span>手写笔记
+          </button>
+          <button class="create-tab" data-mode="camera">
+            <span class="tab-emoji">📸</span>拍照生成
+          </button>
+          <button class="create-tab" data-mode="upload">
+            <span class="tab-emoji">📄</span>上传文档
+          </button>
+        </div>
+
+        <!-- Write mode -->
+        <div class="create-panel" id="createPanelWrite">
+          <div class="form-group">
+            <label>标题 *</label>
+            <input type="text" id="newNoteTitle" placeholder="笔记标题">
+          </div>
+          <div class="form-group">
+            <label>课程</label>
+            <input type="text" id="newNoteCourse" placeholder="如：高等数学">
+          </div>
+          <div class="form-group">
+            <label>文件夹路径</label>
+            <input type="text" id="newNoteFolder" placeholder="如：数学/线性代数（留空则归档到根目录）">
+          </div>
+          <div class="form-group">
+            <label>标签</label>
+            <div class="tag-input-wrap" id="newNoteTags">
+              <input type="text" id="newNoteTagInput" placeholder="输入标签后回车">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>内容</label>
+            <textarea id="newNoteContent" placeholder="在这里写下你的笔记..."></textarea>
+          </div>
+        </div>
+
+        <!-- Camera mode -->
+        <div class="create-panel" id="createPanelCamera" style="display:none;">
+          <div class="modal-upload-area" id="cameraUploadArea">
+            <div class="upload-placeholder" id="cameraPlaceholder">
+              <span style="font-size:32px;">📸</span>
+              <p>点击选择或拖拽课堂照片</p>
+              <p class="eyebrow">支持板书、PPT、课本页面</p>
+            </div>
+            <img id="cameraPreview" class="image-preview" alt="预览" style="display:none;">
+            <input type="file" id="cameraFileInput" accept="image/*" style="display:none;">
+          </div>
+          <button class="primary-action" id="processCameraImage" style="width:100%;margin-top:10px;">
+            <span class="spark-icon"></span>AI 识别照片
+          </button>
+          <div id="cameraResult" style="margin-top:10px;"></div>
+          <!-- Camera editable form (shown after recognition) -->
+          <div id="cameraEditForm" style="display:none;">
+            <div class="form-group" style="margin-top:12px;">
+              <label>笔记标题 *</label>
+              <input type="text" id="cameraNoteTitle" placeholder="笔记标题">
+            </div>
+            <div class="form-group">
+              <label>文件夹路径</label>
+              <input type="text" id="cameraNoteFolder" placeholder="如：数学/线性代数">
+            </div>
+            <div class="form-group">
+              <label>标签</label>
+              <div class="tag-input-wrap" id="cameraNoteTags">
+                <input type="text" id="cameraNoteTagInput" placeholder="输入标签后回车">
+              </div>
+            </div>
+            <div class="form-group">
+              <label>AI 识别内容</label>
+              <div class="content-preview-toolbar">
+                <button class="text-button content-preview-toggle active" data-preview-target="cameraPreviewContent" data-mode="rendered">预览</button>
+                <button class="text-button content-preview-toggle" data-preview-target="cameraPreviewContent" data-mode="raw">原文</button>
+              </div>
+              <div class="content-preview rendered active" id="cameraPreviewContentRendered"></div>
+              <textarea id="cameraNoteContent" rows="8" placeholder="AI 识别的内容将显示在这里..." style="display:none;"></textarea>
+            </div>
+            <button class="primary-action" id="saveCameraNote" style="width:100%;margin-top:8px;">保存为笔记</button>
+          </div>
+        </div>
+
+        <!-- Upload mode -->
+        <div class="create-panel" id="createPanelUpload" style="display:none;">
+          <div class="modal-upload-area" id="docUploadAreaModal">
+            <div class="upload-placeholder" id="docUploadPlaceholderModal">
+              <span style="font-size:32px;">📄</span>
+              <p>上传 PDF / TXT / Word 文档</p>
+              <p class="eyebrow">文档内容将被提取，可保存为笔记或加入知识库</p>
+            </div>
+            <input type="file" id="docFileInputModal" accept=".pdf,.txt,.md,.docx" style="display:none;">
+          </div>
+          <p id="docUploadStatusModal" style="font-size:12px;color:var(--muted);margin-top:6px;"></p>
+          <!-- Document edit form (shown after extraction) -->
+          <div id="docEditForm" style="display:none;">
+            <div class="form-group" style="margin-top:12px;">
+              <label>笔记标题 *</label>
+              <input type="text" id="uploadNoteTitle" placeholder="笔记标题">
+            </div>
+            <div class="form-group">
+              <label>文件夹路径</label>
+              <input type="text" id="uploadNoteFolder" placeholder="如：数学/线性代数">
+            </div>
+            <div class="form-group">
+              <label>标签</label>
+              <div class="tag-input-wrap" id="uploadNoteTags">
+                <input type="text" id="uploadNoteTagInput" placeholder="输入标签后回车">
+              </div>
+            </div>
+            <div class="form-group">
+              <label>文档内容</label>
+              <div class="content-preview-toolbar">
+                <button class="text-button content-preview-toggle active" data-preview-target="uploadPreviewContent" data-mode="rendered">预览</button>
+                <button class="text-button content-preview-toggle" data-preview-target="uploadPreviewContent" data-mode="raw">原文</button>
+              </div>
+              <div class="content-preview rendered active" id="uploadPreviewContentRendered"></div>
+              <textarea id="uploadNoteContent" rows="8" placeholder="文档提取的内容将显示在这里..." style="display:none;"></textarea>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:8px;">
+              <button class="primary-action" id="saveUploadAsNote" style="flex:1;">保存为笔记</button>
+              <button class="secondary-action" id="saveUploadToKB" style="flex:1;">保存到知识库</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" id="createModalFooter">
+        <button class="secondary-action" id="cancelCreateNote" style="flex:1;">取消</button>
+        <button class="primary-action" id="saveNewNote" style="flex:1;">保存笔记</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Note Editor Modal -->
+  <div class="note-editor-overlay" id="noteEditorOverlay">
+    <div class="note-editor">
+      <div class="modal-header">
+        <h2>编辑笔记</h2>
+        <button class="modal-close" id="closeNoteEditor">x</button>
+      </div>
+      <div class="editor-body">
+        <div class="form-group">
+          <label>标题</label>
+          <input type="text" id="editNoteTitle">
+        </div>
+        <div class="form-group">
+          <label>课程</label>
+          <input type="text" id="editNoteCourse">
+        </div>
+        <div class="form-group">
+          <label>文件夹路径</label>
+          <input type="text" id="editNoteFolder" placeholder="如：数学/线性代数">
+        </div>
+        <div class="form-group">
+          <label>标签</label>
+          <div class="tag-input-wrap" id="editNoteTags">
+            <input type="text" id="editNoteTagInput" placeholder="输入标签后回车">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>内容</label>
+          <textarea id="editNoteContent" rows="10"></textarea>
+        </div>
+      </div>
+      <div class="editor-toolbar" style="display:flex;justify-content:space-between;">
+        <div style="display:flex;gap:8px;">
+          <button class="secondary-action" id="editorAiStructure" style="min-height:34px;font-size:12px;">
+            <span class="spark-icon"></span>AI 结构化
+          </button>
+          <button class="secondary-action" id="editorDeleteNote" style="min-height:34px;font-size:12px;color:var(--danger);">
+            删除笔记
+          </button>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="secondary-action" id="cancelEditNote" style="min-height:34px;font-size:12px;">取消</button>
+          <button class="primary-action" id="saveEditNote" style="min-height:34px;font-size:12px;">保存</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Save Makeup as Note Modal -->
+  <div class="modal-overlay" id="saveMakeupNoteOverlay">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>保存补课包为笔记</h2>
+        <button class="modal-close" id="closeSaveMakeupNote">x</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>笔记标题 *</label>
+          <input type="text" id="saveMakeupTitle" placeholder="补课包笔记标题">
+        </div>
+        <div class="form-group">
+          <label>文件夹路径</label>
+          <input type="text" id="saveMakeupFolder" placeholder="如：补课/高等数学（留空则归档到根目录）">
+        </div>
+        <div class="form-group">
+          <label>标签</label>
+          <div class="tag-input-wrap" id="saveMakeupTagsWrap">
+            <input type="text" id="saveMakeupTagInput" placeholder="输入标签后回车">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>原文内容预览</label>
+          <div class="content-preview rendered" id="saveMakeupPreview" style="max-height:200px;overflow-y:auto;"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="secondary-action" id="cancelSaveMakeupNote">取消</button>
+        <button class="primary-action" id="confirmSaveMakeupNote">保存笔记</button>
+      </div>
+    </div>
+  </div>
+
   <div class="image-lightbox" id="imageLightbox" aria-hidden="true">
     <button class="image-lightbox-close" id="closeImageLightbox" aria-label="Close preview">&times;</button>
     <img id="imageLightboxImg" alt="Preview">
   </div>
-  <script src="/app.js?v=13"></script>
+
+  <script src="/app.js?v=23"></script>
 </body>
 </html>
