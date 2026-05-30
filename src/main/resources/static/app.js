@@ -244,7 +244,30 @@ function showApp(user) {
   $("#appShell").style.display = "";
   $("#floatingBubble").style.display = "";
   $("#bubbleTooltip").style.display = "";
-  $("#userBadge").textContent = user.name;
+  renderProfile(user);
+}
+
+function profileValue(value, fallback = "未填写") {
+  return value && String(value).trim() ? String(value).trim() : fallback;
+}
+
+function profileInitial(user) {
+  const raw = profileValue(user?.name, user?.username || "蓝");
+  const char = Array.from(raw.trim())[0] || "蓝";
+  return char.toUpperCase();
+}
+
+function renderProfile(user) {
+  if (!$("#profileName")) return;
+  const name = profileValue(user?.name, "蓝心同学");
+  const username = profileValue(user?.username, "demo");
+  $("#profileAvatar").textContent = profileInitial(user);
+  $("#profileName").textContent = name;
+  $("#profileUsername").textContent = "@" + username;
+  $("#profileSchool").textContent = profileValue(user?.school);
+  $("#profileMajor").textContent = profileValue(user?.major);
+  $("#profileGrade").textContent = profileValue(user?.grade);
+  $("#profileAccount").textContent = username;
 }
 
 async function handleLogin(e) {
@@ -324,6 +347,10 @@ function navTo(panel) {
 
 const bubble = () => $("#floatingBubble");
 const tooltip = () => $("#bubbleTooltip");
+const BUBBLE_SIZE = 72;
+const BUBBLE_EDGE_OFFSET = 10;
+const BUBBLE_BOTTOM_SAFE = 96;
+const BUBBLE_TOOLTIP_GAP = 10;
 let bubblePos = { x: 0, y: 0 };
 let isDragging = false;
 let dragStart = { x: 0, y: 0 };
@@ -339,7 +366,7 @@ function initBubble() {
     } catch (_) {}
   }
   if (!bubblePos.x && !bubblePos.y) {
-    bubblePos.x = window.innerWidth - 76;
+    bubblePos.x = window.innerWidth - BUBBLE_SIZE + BUBBLE_EDGE_OFFSET;
     bubblePos.y = window.innerHeight * 0.55;
   }
   bb.style.left = bubblePos.x + "px";
@@ -349,8 +376,8 @@ function initBubble() {
   bb.addEventListener("pointerdown", onBubbleDown);
   bb.addEventListener("click", onBubbleClick);
   window.addEventListener("resize", () => {
-    bubblePos.x = Math.min(bubblePos.x, window.innerWidth - 60);
-    bubblePos.y = Math.min(bubblePos.y, window.innerHeight - 60);
+    bubblePos.x = Math.max(-BUBBLE_EDGE_OFFSET, Math.min(bubblePos.x, window.innerWidth - BUBBLE_SIZE + BUBBLE_EDGE_OFFSET));
+    bubblePos.y = Math.max(10, Math.min(bubblePos.y, window.innerHeight - BUBBLE_BOTTOM_SAFE));
     bb.style.left = bubblePos.x + "px";
     bb.style.top = bubblePos.y + "px";
     updateBubbleSnap();
@@ -389,8 +416,8 @@ function onBubbleMove(e) {
   if (dx > 3 || dy > 3) hasMoved = true;
   bubblePos.x = e.clientX - dragStart.x;
   bubblePos.y = e.clientY - dragStart.y;
-  bubblePos.x = Math.max(-20, Math.min(window.innerWidth - 36, bubblePos.x));
-  bubblePos.y = Math.max(10, Math.min(window.innerHeight - 80, bubblePos.y));
+  bubblePos.x = Math.max(-BUBBLE_EDGE_OFFSET, Math.min(window.innerWidth - BUBBLE_SIZE + BUBBLE_EDGE_OFFSET, bubblePos.x));
+  bubblePos.y = Math.max(10, Math.min(window.innerHeight - BUBBLE_BOTTOM_SAFE, bubblePos.y));
   bubble().style.left = bubblePos.x + "px";
   bubble().style.top = bubblePos.y + "px";
   bubble().classList.remove("snap-left", "snap-right");
@@ -412,13 +439,13 @@ function onBubbleClick(e) {
 
 function updateBubbleSnap() {
   const bb = bubble();
-  const cx = bubblePos.x + 28;
+  const cx = bubblePos.x + BUBBLE_SIZE / 2;
   bb.classList.remove("snap-left", "snap-right");
   if (cx < window.innerWidth / 2) {
-    bubblePos.x = -12;
+    bubblePos.x = -BUBBLE_EDGE_OFFSET;
     bb.classList.add("snap-right");
   } else {
-    bubblePos.x = window.innerWidth - 44;
+    bubblePos.x = window.innerWidth - BUBBLE_SIZE + BUBBLE_EDGE_OFFSET;
     bb.classList.add("snap-left");
   }
   bb.style.left = bubblePos.x + "px";
@@ -428,15 +455,16 @@ function updateBubbleSnap() {
 function updateTooltip() {
   const tt = tooltip();
   if (!tt) return;
-  const cx = bubblePos.x + 28;
+  const cx = bubblePos.x + BUBBLE_SIZE / 2;
   if (cx < window.innerWidth / 2) {
-    tt.style.left = (bubblePos.x + 56) + "px";
-    tt.style.top = (bubblePos.y + 8) + "px";
+    tt.style.left = (bubblePos.x + BUBBLE_SIZE + BUBBLE_TOOLTIP_GAP) + "px";
+    tt.style.top = (bubblePos.y + 12) + "px";
+    tt.style.transform = "";
     tt.classList.remove("point-left");
     tt.classList.add("point-right");
   } else {
-    tt.style.left = (bubblePos.x - 10) + "px";
-    tt.style.top = (bubblePos.y + 8) + "px";
+    tt.style.left = (bubblePos.x - BUBBLE_TOOLTIP_GAP) + "px";
+    tt.style.top = (bubblePos.y + 12) + "px";
     tt.classList.remove("point-right");
     tt.classList.add("point-left");
     tt.style.transform = "translateX(-100%)";

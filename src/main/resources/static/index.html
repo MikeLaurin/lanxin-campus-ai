@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>蓝心校园 AI 管家</title>
-  <link rel="stylesheet" href="/styles.css?v=9">
+  <link rel="stylesheet" href="/styles.css?v=12">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
 </head>
@@ -50,10 +50,6 @@
       <div>
         <p class="eyebrow">vivo 快应用 MVP</p>
         <h1>蓝心校园 AI 管家</h1>
-      </div>
-      <div style="display:flex;align-items:center;gap:8px;">
-        <span id="userBadge" style="font-size:13px;color:var(--muted);"></span>
-        <button class="text-button" id="logoutBtn" style="color:var(--muted);">退出</button>
       </div>
     </header>
 
@@ -146,8 +142,39 @@
         </section>
       </div>
 
-      <!-- Weekly Report Panel -->
+      <!-- My Panel -->
       <div class="tab-panel" data-panel="report">
+        <section class="profile-card">
+          <div class="profile-main">
+            <div class="profile-avatar" id="profileAvatar">蓝</div>
+            <div class="profile-copy">
+              <p class="eyebrow">个人中心</p>
+              <h2 id="profileName">蓝心同学</h2>
+              <p id="profileUsername">@demo</p>
+            </div>
+          </div>
+          <div class="profile-meta-grid">
+            <div class="profile-meta-item">
+              <span>学校</span>
+              <strong id="profileSchool">未填写</strong>
+            </div>
+            <div class="profile-meta-item">
+              <span>专业</span>
+              <strong id="profileMajor">未填写</strong>
+            </div>
+            <div class="profile-meta-item">
+              <span>年级</span>
+              <strong id="profileGrade">未填写</strong>
+            </div>
+            <div class="profile-meta-item">
+              <span>账号</span>
+              <strong id="profileAccount">demo</strong>
+            </div>
+          </div>
+          <div class="profile-actions">
+            <button class="secondary-action" id="logoutBtn">退出登录</button>
+          </div>
+        </section>
         <section class="section-block">
           <div class="section-head">
             <h2>学习周报</h2>
@@ -162,13 +189,13 @@
       <button class="active" data-nav="home"><span>🏠</span><small>首页</small></button>
       <button data-nav="notes"><span>📝</span><small>笔记</small></button>
       <button data-nav="tasks"><span>⏰</span><small>DDL</small></button>
-      <button data-nav="report"><span>📊</span><small>周报</small></button>
+      <button data-nav="report"><span>👤</span><small>我的</small></button>
     </nav>
   </main>
 
   <!-- Floating Bubble — 小蓝 -->
   <div class="floating-bubble" id="floatingBubble" aria-label="小蓝 AI 助手" title="小蓝 AI 助手">
-    ✨
+    <img src="/assets/xiaolan-bot-head.png" alt="" aria-hidden="true">
   </div>
   <div class="bubble-tooltip" id="bubbleTooltip">hi，我是小蓝，点开可以和我聊天</div>
 
@@ -456,6 +483,6 @@
     <img id="imageLightboxImg" alt="Preview">
   </div>
 
-  <script src="/app.js?v=23"></script>
+  <script src="/app.js?v=26"></script>
 </body>
 </html>
