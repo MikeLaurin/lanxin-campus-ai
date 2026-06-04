@@ -168,7 +168,21 @@ function renderMarkdown(text) {
     return MATH_PLACEHOLDER + idx + "%%";
   });
 
-  // $...$ inline math (single line)
+  // \[...\] display math (LaTeX standard — multi-line aware)
+  html = html.replace(/\\\[([\s\S]*?)\\\]/g, (_, formula) => {
+    const idx = mathBlocks.length;
+    mathBlocks.push({ type: "display", formula: formula.trim() });
+    return MATH_PLACEHOLDER + idx + "%%";
+  });
+
+  // \(...\) inline math (LaTeX standard — single line)
+  html = html.replace(/\\\((.+?)\\\)/g, (_, formula) => {
+    const idx = mathBlocks.length;
+    mathBlocks.push({ type: "inline", formula: formula.trim() });
+    return MATH_PLACEHOLDER + idx + "%%";
+  });
+
+  // $...$ inline math (single line — processed last to avoid conflicting with $$)
   html = html.replace(/\$(.+?)\$/g, (_, formula) => {
     const idx = mathBlocks.length;
     mathBlocks.push({ type: "inline", formula: formula.trim() });
@@ -1480,9 +1494,10 @@ function setupTagInput(wrapId, inputId) {
 // ── Dashboard / Home ──────────────────────────────────
 
 function renderStats(data) {
+  const totalPending = (data.overdueReminderCount || 0) + (data.openReminderCount || 0);
   $("#statsGrid").innerHTML = [
     ["笔记", data.noteCount, ""],
-    ["待办", data.openReminderCount, ""],
+    ["待办", totalPending, ""],
     ["连续学习", data.studyDays, "天"]
   ].map(([label, value, suffix]) =>
     `<div class="stat"><strong class="count-target">${value}${suffix}</strong><span>${label}</span></div>`
@@ -1490,7 +1505,7 @@ function renderStats(data) {
   setTimeout(() => {
     const items = [
       { el: $$(".stat .count-target")[0], val: data.noteCount, s: "" },
-      { el: $$(".stat .count-target")[1], val: data.openReminderCount, s: "" },
+      { el: $$(".stat .count-target")[1], val: totalPending, s: "" },
       { el: $$(".stat .count-target")[2], val: data.studyDays, s: "天" }
     ];
     items.forEach(({ el, val, s }) => { if (el) animateCounter(el, val, s); });
@@ -1498,13 +1513,16 @@ function renderStats(data) {
 }
 
 function reminderItem(reminder) {
+  const dueDate = reminder.dueDate || "";
+  const today = new Date().toISOString().substring(0, 10);
+  const isOverdue = dueDate && dueDate < today;
   return `
-    <article class="list-item">
+    <article class="list-item${isOverdue ? " overdue" : ""}">
       <h3>${escapeHtml(reminder.title || "")}</h3>
-      <p>${escapeHtml(reminder.course || "")} · 截止 ${escapeHtml(reminder.dueDate || "")}</p>
+      <p>${reminder.course ? escapeHtml(reminder.course) + " · " : ""}截止 ${escapeHtml(dueDate || "未指定")}${isOverdue ? " <span class=\"due-overdue-label\">（已过期）</span>" : ""}</p>
       <div class="meta-row">
         <span class="tag ${reminder.priority}">${priorityLabel(reminder.priority)}</span>
-        <span class="tag">${escapeHtml(reminder.source || "AI 管家提醒")}</span>
+        ${reminder.source ? `<span class="tag">${escapeHtml(reminder.source.replace("AI 解析：", "").substring(0, 40))}</span>` : ""}
       </div>
     </article>
   `;
@@ -1531,31 +1549,424 @@ async function loadDashboard() {
     api("/api/v1/notes")
   ]);
   renderStats(stats);
+  renderNavBadge(stats);
+  renderOverdueWarning(stats.overdueReminderCount || 0);
   $("#todayList").innerHTML = today.length ? today.map(reminderItem).join("") : empty("今天没有临近 DDL");
   $("#recentNotes").innerHTML = notes.slice(0, 3).map(noteItem).join("");
 }
 
+function renderNavBadge(stats) {
+  const badge = $("#navDdlBadge");
+  if (!badge) return;
+  const totalPending = (stats.overdueReminderCount || 0) + (stats.urgentReminderCount || 0);
+  if (totalPending > 0) {
+    badge.textContent = totalPending > 99 ? "99+" : totalPending;
+    badge.style.display = "";
+  } else {
+    badge.style.display = "none";
+  }
+}
+
+function renderOverdueWarning(count) {
+  const warning = $("#homeOverdueWarning");
+  if (!warning) return;
+  if (count > 0) {
+    $("#homeOverdueText").textContent = `你有 ${count} 个已过期的 DDL，请及时处理`;
+    warning.style.display = "flex";
+  } else {
+    warning.style.display = "none";
+  }
+}
+
 // ── DDL ───────────────────────────────────────────────
 
-async function loadTasks(priority = false) {
-  const tasks = await api(priority ? "/api/v1/reminders/priority" : "/api/v1/reminders");
-  $("#taskList").innerHTML = tasks.length ? tasks.map(reminderItem).join("") : empty("暂无 DDL");
+let ddlTab = "incomplete";
+let ddlFilter = "all";
+let ddlCompletedPage = 0;
+
+function switchDdlTab(tab) {
+  ddlTab = tab;
+  ddlCompletedPage = 0;
+  ddlFilter = "all";
+  $$(".ddl-tab").forEach(t => t.classList.toggle("active", t.dataset.ddlTab === tab));
+  // Show/hide filter bar (only for incomplete)
+  const filterBar = $("#ddlFilterBar");
+  if (filterBar) filterBar.style.display = tab === "incomplete" ? "flex" : "none";
+  $$(".ddl-filter-btn").forEach(b => b.classList.toggle("active", b.dataset.filter === "all"));
+  loadTasks();
 }
+
+function switchDdlFilter(filter) {
+  ddlFilter = filter;
+  $$(".ddl-filter-btn").forEach(b => b.classList.toggle("active", b.dataset.filter === filter));
+  loadTasks();
+}
+
+async function loadTasks(page = 0) {
+  try {
+    if (ddlTab === "completed") {
+      ddlCompletedPage = page;
+      const tasks = await api(`/api/v1/reminders?includeCompleted=true&page=${page}&size=20`);
+      const completed = tasks.filter(t => t.completed);
+      if (completed.length === 0) {
+        $("#taskList").innerHTML = empty(page === 0 ? "暂无已完成的 DDL" : "没有更多了");
+        $("#taskLoadMore").style.display = "none";
+        return;
+      }
+      $("#taskList").innerHTML = completed.map(ddlItem).join("");
+      $("#taskLoadMore").style.display = completed.length >= 20 ? "" : "none";
+    } else {
+      const tasks = await api("/api/v1/reminders");
+      let filtered = tasks.filter(t => !t.completed);
+      const today = new Date().toISOString().substring(0, 10);
+
+      // Apply filter
+      if (ddlFilter === "high") {
+        filtered = filtered.filter(t => t.priority === "high");
+      } else if (ddlFilter === "week") {
+        const weekEnd = new Date(Date.now() + 7 * 86400000).toISOString().substring(0, 10);
+        filtered = filtered.filter(t => t.dueDate && t.dueDate >= today && t.dueDate <= weekEnd);
+      } else if (ddlFilter === "overdue") {
+        filtered = filtered.filter(t => t.dueDate && t.dueDate < today);
+      }
+
+      if (filtered.length === 0) {
+        const emptyMsgs = {
+          all: "暂无待办的 DDL，真棒！",
+          high: "没有高优先级 DDL",
+          week: "本周没有截止的 DDL",
+          overdue: "没有已过期的 DDL，继续保持！"
+        };
+        $("#taskList").innerHTML = empty(emptyMsgs[ddlFilter] || "暂无 DDL");
+        $("#taskLoadMore").style.display = "none";
+        return;
+      }
+
+      // Sort: overdue first, then by due date
+      filtered.sort((a, b) => {
+        const aOverdue = a.dueDate && a.dueDate < today ? 0 : 1;
+        const bOverdue = b.dueDate && b.dueDate < today ? 0 : 1;
+        if (aOverdue !== bOverdue) return aOverdue - bOverdue;
+        return (a.dueDate || "").localeCompare(b.dueDate || "");
+      });
+
+      $("#taskList").innerHTML = filtered.map(ddlItem).join("");
+      $("#taskLoadMore").style.display = "none";
+    }
+
+    // Bind DDL action buttons
+    $$(".ddl-complete-btn").forEach(btn => {
+      btn.addEventListener("click", (e) => { e.stopPropagation(); completeReminder(parseInt(btn.dataset.reminderId)); });
+    });
+    $$(".ddl-delete-btn").forEach(btn => {
+      btn.addEventListener("click", (e) => { e.stopPropagation(); deleteReminder(parseInt(btn.dataset.reminderId), btn); });
+    });
+    $$(".ddl-uncomplete-btn").forEach(btn => {
+      btn.addEventListener("click", (e) => { e.stopPropagation(); uncompleteReminder(parseInt(btn.dataset.reminderId)); });
+    });
+    $$(".ddl-edit-btn").forEach(btn => {
+      btn.addEventListener("click", (e) => { e.stopPropagation(); openEditDdl(parseInt(btn.dataset.reminderId)); });
+    });
+    // Card click to expand
+    $$(".ddl-card").forEach(card => {
+      card.addEventListener("click", (e) => {
+        if (e.target.closest("button")) return;
+        card.classList.toggle("expanded");
+      });
+    });
+  } catch (err) { console.error("Load tasks failed:", err); }
+}
+
+function formatDueDate(dateStr) {
+  if (!dateStr) return '<span class="due-badge">未指定日期</span>';
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const due = new Date(dateStr + "T00:00:00");
+  const diffDays = Math.ceil((due - today) / (1000 * 60 * 60 * 24));
+  if (diffDays < 0) return `<span class="due-badge overdue">已过期 ${Math.abs(diffDays)} 天</span>`;
+  if (diffDays === 0) return `<span class="due-badge today">今天截止</span>`;
+  if (diffDays === 1) return `<span class="due-badge tomorrow">明天截止</span>`;
+  return `<span class="due-badge upcoming">${dateStr}（${diffDays} 天后）</span>`;
+}
+
+function ddlItem(reminder) {
+  const completed = reminder.completed;
+  const dueDateHtml = formatDueDate(reminder.dueDate);
+  const priorityIcon = { high: "🔴", medium: "🟡", low: "🟢" }[reminder.priority] || "🟡";
+  const categoryHtml = reminder.course
+    ? `<span class="ddl-category">${escapeHtml(reminder.course)}</span>`
+    : "";
+  const completedInfo = completed && reminder.completedAt
+    ? `<span class="ddl-completed-at">完成于 ${(reminder.completedAt || "").substring(0, 10)}</span>`
+    : "";
+  const isOverdue = reminder.dueDate && reminder.dueDate < new Date().toISOString().substring(0, 10) && !completed;
+  const sourceText = (reminder.source || "").replace("AI 解析：", "");
+  const sourceFull = sourceText.length > 60 ? sourceText : "";
+
+  return `
+    <article class="ddl-card${completed ? " completed" : ""}${isOverdue ? " overdue" : ""}">
+      <div class="ddl-card-main">
+        <div class="ddl-card-header">
+          <span class="ddl-priority-icon">${priorityIcon}</span>
+          <h3 class="ddl-title">${escapeHtml(reminder.title || "")}</h3>
+        </div>
+        <div class="ddl-card-meta">
+          ${dueDateHtml}
+          ${categoryHtml}
+          ${completedInfo}
+          <span class="tag ${reminder.priority}">${priorityLabel(reminder.priority)}</span>
+          ${sourceText ? `<span class="ddl-source">${escapeHtml(sourceText.substring(0, 60))}${sourceText.length > 60 ? "..." : ""}</span>` : ""}
+        </div>
+        ${sourceFull ? `<div class="ddl-card-expand"><p>${escapeHtml(sourceFull)}</p></div>` : ""}
+      </div>
+      <div class="ddl-card-actions">
+        ${!completed ? `<button class="ddl-edit-btn" data-reminder-id="${reminder.id}" title="编辑">✎</button>` : ""}
+        ${completed
+          ? `<button class="ddl-uncomplete-btn" data-reminder-id="${reminder.id}" title="恢复为未完成">↩</button>`
+          : `<button class="ddl-complete-btn" data-reminder-id="${reminder.id}" title="标记为完成">✓</button>`
+        }
+        <button class="ddl-delete-btn" data-reminder-id="${reminder.id}" title="删除">✕</button>
+      </div>
+    </article>
+  `;
+}
+
+// ── DDL Actions ─────────────────────────────────────
+
+async function completeReminder(id) {
+  try {
+    await api(`/api/v1/reminders/${id}/complete`, { method: "PUT" });
+    showUndoToast("DDL 已标记为完成", async () => {
+      await api(`/api/v1/reminders/${id}/uncomplete`, { method: "PUT" });
+      await refreshAll();
+    });
+    await refreshAll();
+  } catch (err) { showToast("操作失败：" + err.message); }
+}
+
+async function uncompleteReminder(id) {
+  try {
+    await api(`/api/v1/reminders/${id}/uncomplete`, { method: "PUT" });
+    showToast("DDL 已恢复为未完成");
+    await refreshAll();
+  } catch (err) { showToast("操作失败：" + err.message); }
+}
+
+async function deleteReminder(id, btn) {
+  if (btn && btn.dataset.confirming !== "true") {
+    btn.dataset.confirming = "true";
+    btn.textContent = "确认";
+    btn.style.color = "var(--danger)";
+    clearTimeout(btn._confirmTimer);
+    btn._confirmTimer = setTimeout(() => {
+      btn.dataset.confirming = "";
+      btn.textContent = "✕";
+      btn.style.color = "";
+    }, 3000);
+    return;
+  }
+  if (btn) clearTimeout(btn._confirmTimer);
+  try {
+    await api(`/api/v1/reminders/${id}`, { method: "DELETE" });
+    showUndoToast("DDL 已删除", async () => {
+      // Can't really undo delete easily, but we keep the toast pattern
+      showToast("请重新创建该 DDL");
+    });
+    await refreshAll();
+  } catch (err) { showToast("删除失败：" + err.message); }
+}
+
+function showUndoToast(message, onUndo) {
+  let toast = $("#appToastUndo");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "appToastUndo";
+    toast.className = "app-toast undo-toast";
+    document.body.appendChild(toast);
+  }
+  toast.innerHTML = `${message} <button class="toast-undo-btn" id="toastUndoBtn">撤销</button>`;
+  toast.classList.add("show");
+  clearTimeout(showUndoToast.timer);
+  const undoBtn = $("#toastUndoBtn");
+  if (undoBtn) {
+    undoBtn.addEventListener("click", () => {
+      clearTimeout(showUndoToast.timer);
+      toast.classList.remove("show");
+      if (onUndo) onUndo();
+    });
+  }
+  showUndoToast.timer = setTimeout(() => toast.classList.remove("show"), 5000);
+}
+
+async function refreshAll() {
+  await Promise.all([loadTasks(), loadDashboard()]);
+}
+
+// ── Manual DDL ──────────────────────────────────────
+
+let editingDdlId = null;
+
+function openManualDdl(id) {
+  editingDdlId = id || null;
+  const overlay = $("#manualDdlOverlay");
+  if (id) {
+    $("#manualDdlModalTitle").textContent = "编辑 DDL";
+    loadDdlForEdit(id);
+  } else {
+    $("#manualDdlModalTitle").textContent = "手动添加 DDL";
+    $("#manualDdlTitle").value = "";
+    $("#manualDdlCategory").value = "";
+    $("#manualDdlDate").value = new Date(Date.now() + 86400000).toISOString().substring(0, 10);
+    $("#manualDdlPriority").value = "medium";
+    $("#manualDdlNote").value = "";
+  }
+  overlay.classList.add("open");
+}
+
+function closeManualDdl() {
+  $("#manualDdlOverlay").classList.remove("open");
+  editingDdlId = null;
+}
+
+async function loadDdlForEdit(id) {
+  try {
+    const tasks = await api("/api/v1/reminders?includeCompleted=true");
+    const task = tasks.find(t => t.id === id);
+    if (!task) { showToast("DDL 未找到"); return; }
+    $("#manualDdlTitle").value = task.title || "";
+    $("#manualDdlDate").value = task.dueDate || "";
+    $("#manualDdlPriority").value = task.priority || "medium";
+    $("#manualDdlCategory").value = task.course || "";
+    $("#manualDdlNote").value = (task.source || "").replace("AI 解析：", "").replace("手动创建", "");
+  } catch (err) { showToast("加载失败：" + err.message); }
+}
+
+async function saveManualDdl() {
+  const title = $("#manualDdlTitle").value?.trim();
+  if (!title) { showToast("请输入标题"); return; }
+  const course = $("#manualDdlCategory").value.trim();
+  const dueDate = $("#manualDdlDate").value || null;
+  const priority = $("#manualDdlPriority").value || "medium";
+  const source = $("#manualDdlNote").value.trim() || "手动创建";
+
+  const btn = $("#saveManualDdl");
+  await withButtonLoading(btn, "保存中...", async () => {
+    try {
+      const body = { title, course, dueDate, priority, source };
+      if (editingDdlId) {
+        await api(`/api/v1/reminders/${editingDdlId}`, { method: "PUT", body: JSON.stringify(body) });
+        showToast("DDL 已更新");
+      } else {
+        await api("/api/v1/reminders", { method: "POST", body: JSON.stringify(body) });
+        showToast("DDL 已创建");
+      }
+      closeManualDdl();
+      await refreshAll();
+    } catch (err) { showToast("保存失败：" + err.message); }
+  });
+}
+
+async function openEditDdl(id) {
+  openManualDdl(id);
+}
+
+// ── AI Parse with Preview ────────────────────────────
+
+let pendingParseResults = [];
 
 async function parseDdl(event) {
   const button = event?.currentTarget || $("#parseDdl");
   if (state.pending.has("parse-ddl")) return;
   const text = $("#ddlInput").value.trim();
   if (!text) { showToast("请输入 DDL 文本"); return; }
-  await withButtonLoading(button, "解析中...", async () => {
+  await withButtonLoading(button, "AI 解析中...", async () => {
     state.pending.add("parse-ddl");
     try {
-      await api("/api/v1/reminders/parse", { method: "POST", body: JSON.stringify({ text }) });
-      showToast("DDL 已创建");
-      await Promise.all([loadTasks(), loadDashboard()]);
+      // Try batch parse first
+      let results;
+      try {
+        results = await api("/api/v1/reminders/parse-preview", { method: "POST", body: JSON.stringify({ text }) });
+      } catch (e) {
+        // Fallback to single parse
+        const single = await api("/api/v1/reminders/parse", { method: "POST", body: JSON.stringify({ text }) });
+        results = [single];
+      }
+      if (!results || results.length === 0) {
+        showToast("未能解析出 DDL，请尝试更明确的描述");
+        return;
+      }
+      pendingParseResults = results;
+      renderParsePreview(results);
+      $("#parsePreviewBlock").style.display = "";
     } catch (err) { showToast("解析失败：" + err.message); }
     finally { state.pending.delete("parse-ddl"); }
   });
+}
+
+function renderParsePreview(results) {
+  $("#parsePreviewList").innerHTML = results.map((r, i) => {
+    const dueDateHtml = formatDueDate(r.dueDate);
+    const priorityIcon = { high: "🔴", medium: "🟡", low: "🟢" }[r.priority] || "🟡";
+    return `
+      <article class="ddl-card parse-preview-item">
+        <div class="ddl-card-main">
+          <div class="ddl-card-header">
+            <span class="ddl-priority-icon">${priorityIcon}</span>
+            <h3 class="ddl-title">${escapeHtml(r.title || "")}</h3>
+          </div>
+          <div class="ddl-card-meta">
+            ${dueDateHtml}
+            ${r.course ? `<span class="ddl-category">${escapeHtml(r.course)}</span>` : ""}
+            <span class="tag ${r.priority}">${priorityLabel(r.priority)}</span>
+            ${r.source ? `<span class="ddl-source">${escapeHtml((r.source || "").replace("AI 解析：", "").substring(0, 50))}</span>` : ""}
+          </div>
+        </div>
+        <button class="ddl-delete-btn parse-remove-btn" data-parse-idx="${i}" title="移除此项">✕</button>
+      </article>
+    `;
+  }).join("");
+
+  // Bind remove buttons
+  $$(".parse-remove-btn").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const idx = parseInt(btn.dataset.parseIdx);
+      pendingParseResults.splice(idx, 1);
+      if (pendingParseResults.length === 0) {
+        $("#parsePreviewBlock").style.display = "none";
+      } else {
+        renderParsePreview(pendingParseResults);
+      }
+    });
+  });
+}
+
+async function confirmParseResults() {
+  if (pendingParseResults.length === 0) return;
+  const btn = $("#confirmParseResults");
+  await withButtonLoading(btn, "保存中...", async () => {
+    try {
+      const requests = pendingParseResults.map(r => ({
+        title: r.title,
+        course: r.course || "",
+        dueDate: r.dueDate,
+        priority: r.priority || "medium",
+        source: r.source || ""
+      }));
+      await api("/api/v1/reminders/batch-save", { method: "POST", body: JSON.stringify(requests) });
+      showToast(`已保存 ${requests.length} 个 DDL`);
+      $("#parsePreviewBlock").style.display = "none";
+      pendingParseResults = [];
+      $("#ddlInput").value = "";
+      ddlTab = "incomplete";
+      $$(".ddl-tab").forEach(t => t.classList.toggle("active", t.dataset.ddlTab === "incomplete"));
+      await refreshAll();
+    } catch (err) { showToast("保存失败：" + err.message); }
+  });
+}
+
+function cancelParseResults() {
+  $("#parsePreviewBlock").style.display = "none";
+  pendingParseResults = [];
 }
 
 // ── Weekly Report ─────────────────────────────────────
@@ -1773,11 +2184,60 @@ function bindEvents() {
   $("#editorAiStructure").addEventListener("click", aiStructureNote);
 
   // DDL
-  $("#addDdlSample").addEventListener("click", () => {
-    $("#ddlInput").value = "明天截止：提交数据结构实验报告，必须包含代码、运行截图和复杂度分析。";
-  });
   $("#parseDdl").addEventListener("click", parseDdl);
-  $("#sortPriority").addEventListener("click", () => loadTasks(true));
+  $("#ddlInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      parseDdl();
+    }
+  });
+  $("#ddlInput").addEventListener("input", () => {
+    const len = $("#ddlInput").value.length;
+    const counter = $("#ddlCharCount");
+    if (counter) counter.textContent = `${len} / 2000`;
+  });
+  $("#clearDdlInput").addEventListener("click", () => {
+    $("#ddlInput").value = "";
+    $("#ddlInput").focus();
+    const counter = $("#ddlCharCount");
+    if (counter) counter.textContent = "0 / 2000";
+  });
+
+  // DDL quick examples
+  $$(".ddl-example-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      $("#ddlInput").value = btn.dataset.example;
+      $("#ddlInput").focus();
+      const counter = $("#ddlCharCount");
+      if (counter) counter.textContent = `${btn.dataset.example.length} / 2000`;
+    });
+  });
+
+  // DDL tabs
+  $$(".ddl-tab").forEach(tab => {
+    tab.addEventListener("click", () => switchDdlTab(tab.dataset.ddlTab));
+  });
+
+  // DDL filter buttons
+  $$(".ddl-filter-btn").forEach(btn => {
+    btn.addEventListener("click", () => switchDdlFilter(btn.dataset.filter));
+  });
+
+  // Parse preview
+  $("#confirmParseResults").addEventListener("click", confirmParseResults);
+  $("#cancelParseResults").addEventListener("click", cancelParseResults);
+
+  // Load more completed
+  $("#loadMoreTasks").addEventListener("click", () => loadTasks(ddlCompletedPage + 1));
+
+  // Manual DDL
+  $("#openManualDdl").addEventListener("click", () => openManualDdl(null));
+  $("#closeManualDdl").addEventListener("click", closeManualDdl);
+  $("#cancelManualDdl").addEventListener("click", closeManualDdl);
+  $("#manualDdlOverlay").addEventListener("click", (e) => {
+    if (e.target === $("#manualDdlOverlay")) closeManualDdl();
+  });
+  $("#saveManualDdl").addEventListener("click", saveManualDdl);
 
   // Refresh
   $("#refreshToday").addEventListener("click", loadDashboard);

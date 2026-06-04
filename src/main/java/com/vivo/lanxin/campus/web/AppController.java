@@ -28,6 +28,7 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -210,12 +211,27 @@ public class AppController {
 
     @GetMapping("/reminders")
     public List<ReminderDto> reminders(@RequestHeader("Authorization") String authHeader,
-                                       @RequestParam(defaultValue = "false") boolean includeCompleted) {
+                                       @RequestParam(defaultValue = "false") boolean includeCompleted,
+                                       @RequestParam(defaultValue = "0") int page,
+                                       @RequestParam(defaultValue = "50") int size) {
         long userId = auth.getUserId(authHeader);
         if (includeCompleted) {
-            return reminderRepo.findByUserIdOrderByDueDateAsc(userId).stream().map(ReminderDto::from).toList();
+            return reminderRepo.findByUserIdAndCompletedTrueOrderByCompletedAtDesc(
+                    userId, org.springframework.data.domain.PageRequest.of(page, size))
+                    .stream().map(ReminderDto::from).toList();
         }
         return reminderRepo.findByUserIdAndCompletedFalse(userId).stream().map(ReminderDto::from).toList();
+    }
+
+    @GetMapping("/reminders/overdue")
+    public Map<String, Object> overdueReminders(@RequestHeader("Authorization") String authHeader) {
+        long userId = auth.getUserId(authHeader);
+        LocalDate today = LocalDate.now();
+        List<ReminderDto> overdue = reminderRepo
+                .findByUserIdAndCompletedFalseAndDueDateLessThanOrderByDueDateAsc(userId, today)
+                .stream().map(ReminderDto::from).toList();
+        long count = reminderRepo.countByUserIdAndCompletedFalseAndDueDateLessThan(userId, today);
+        return Map.of("count", count, "items", overdue);
     }
 
     @PostMapping("/reminders")
@@ -224,12 +240,30 @@ public class AppController {
         Reminder reminder = new Reminder();
         reminder.setUserId(auth.getUserId(authHeader));
         reminder.setTitle(InputSanitizer.clean(request.title(), 120));
-        reminder.setCourse(first(InputSanitizer.nullable(request.course(), 80), "专业课程"));
-        reminder.setDueDate(request.dueDate() == null ? LocalDate.now().plusDays(3) : request.dueDate());
+        reminder.setCourse(first(InputSanitizer.nullable(request.course(), 80), ""));
+        reminder.setDueDate(request.dueDate() == null ? LocalDate.now().plusDays(1) : request.dueDate());
         reminder.setPriority(first(InputSanitizer.nullable(request.priority(), 20), "medium"));
         reminder.setSource(first(InputSanitizer.nullable(request.source(), 200), "手动创建"));
         reminder.setRelatedNoteId(request.relatedNoteId());
+        reminder.setRecurrence(first(InputSanitizer.nullable(request.recurrence(), 20), "none"));
         return ReminderDto.from(reminderRepo.save(reminder));
+    }
+
+    @PutMapping("/reminders/{id}")
+    public ResponseEntity<ReminderDto> updateReminder(@RequestHeader("Authorization") String authHeader,
+                                                       @PathVariable long id,
+                                                       @Valid @RequestBody ReminderRequest request) {
+        long userId = auth.getUserId(authHeader);
+        return reminderRepo.findById(id).filter(r -> r.getUserId() == userId).map(reminder -> {
+            if (request.title() != null) reminder.setTitle(InputSanitizer.clean(request.title(), 120));
+            if (request.course() != null) reminder.setCourse(InputSanitizer.nullable(request.course(), 80));
+            if (request.dueDate() != null) reminder.setDueDate(request.dueDate());
+            if (request.priority() != null) reminder.setPriority(InputSanitizer.nullable(request.priority(), 20));
+            if (request.source() != null) reminder.setSource(InputSanitizer.nullable(request.source(), 200));
+            if (request.relatedNoteId() != null) reminder.setRelatedNoteId(request.relatedNoteId());
+            if (request.recurrence() != null) reminder.setRecurrence(InputSanitizer.nullable(request.recurrence(), 20));
+            return ResponseEntity.ok(ReminderDto.from(reminderRepo.save(reminder)));
+        }).orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     @PutMapping("/reminders/{id}/complete")
@@ -238,6 +272,18 @@ public class AppController {
         long userId = auth.getUserId(authHeader);
         return reminderRepo.findById(id).filter(r -> r.getUserId() == userId).map(reminder -> {
             reminder.setCompleted(true);
+            reminder.setCompletedAt(LocalDateTime.now());
+            return ResponseEntity.ok(ReminderDto.from(reminderRepo.save(reminder)));
+        }).orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    @PutMapping("/reminders/{id}/uncomplete")
+    public ResponseEntity<ReminderDto> uncompleteReminder(@RequestHeader("Authorization") String authHeader,
+                                                          @PathVariable long id) {
+        long userId = auth.getUserId(authHeader);
+        return reminderRepo.findById(id).filter(r -> r.getUserId() == userId).map(reminder -> {
+            reminder.setCompleted(false);
+            reminder.setCompletedAt(null);
             return ResponseEntity.ok(ReminderDto.from(reminderRepo.save(reminder)));
         }).orElseGet(() -> ResponseEntity.notFound().build());
     }
@@ -256,7 +302,8 @@ public class AppController {
     public List<ReminderDto> todayReminders(@RequestHeader("Authorization") String authHeader) {
         long userId = auth.getUserId(authHeader);
         LocalDate today = LocalDate.now();
-        return reminderRepo.findByUserIdAndCompletedFalseAndDueDateLessThanEqualOrderByDueDateAsc(userId, today.plusDays(3))
+        return reminderRepo.findByUserIdAndCompletedFalseAndDueDateBetweenOrderByDueDateAsc(
+                        userId, today, today.plusDays(7))
                 .stream().map(ReminderDto::from).toList();
     }
 
@@ -276,6 +323,44 @@ public class AppController {
         Reminder reminder = ai.parseReminder(Map.of("text", InputSanitizer.clean(request.text(), 2_000)));
         reminder.setUserId(auth.getUserId(authHeader));
         return ReminderDto.from(reminderRepo.save(reminder));
+    }
+
+    @PostMapping("/reminders/parse-batch")
+    public List<ReminderDto> parseReminders(@RequestHeader("Authorization") String authHeader,
+                                            @Valid @RequestBody TextRequest request) {
+        long userId = auth.getUserId(authHeader);
+        List<Reminder> reminders = ai.parseReminders(InputSanitizer.clean(request.text(), 4_000));
+        return reminders.stream().map(r -> {
+            r.setUserId(userId);
+            return ReminderDto.from(reminderRepo.save(r));
+        }).toList();
+    }
+
+    @PostMapping("/reminders/parse-preview")
+    public List<ReminderDto> previewParse(@RequestHeader("Authorization") String authHeader,
+                                          @Valid @RequestBody TextRequest request) {
+        // Parse without saving — return preview for user confirmation
+        List<Reminder> reminders = ai.parseReminders(InputSanitizer.clean(request.text(), 4_000));
+        return reminders.stream().map(r -> {
+            r.setUserId(auth.getUserId(authHeader));
+            return ReminderDto.from(r);
+        }).toList();
+    }
+
+    @PostMapping("/reminders/batch-save")
+    public List<ReminderDto> batchSave(@RequestHeader("Authorization") String authHeader,
+                                        @Valid @RequestBody List<ReminderRequest> requests) {
+        long userId = auth.getUserId(authHeader);
+        return requests.stream().limit(20).map(req -> {
+            Reminder reminder = new Reminder();
+            reminder.setUserId(userId);
+            reminder.setTitle(InputSanitizer.clean(req.title(), 120));
+            reminder.setCourse(first(InputSanitizer.nullable(req.course(), 80), ""));
+            reminder.setDueDate(req.dueDate() == null ? LocalDate.now().plusDays(1) : req.dueDate());
+            reminder.setPriority(first(InputSanitizer.nullable(req.priority(), 20), "medium"));
+            reminder.setSource(first(InputSanitizer.nullable(req.source(), 200), "手动创建"));
+            return ReminderDto.from(reminderRepo.save(reminder));
+        }).toList();
     }
 
     // ── AI ────────────────────────────────────────────────
@@ -577,15 +662,19 @@ public class AppController {
         long userId = auth.getUserId(authHeader);
         LocalDate today = LocalDate.now();
         long noteCount = noteRepo.countByUserId(userId);
-        long openCount = reminderRepo.countByUserIdAndCompletedFalse(userId);
-        long urgentCount = reminderRepo.countByUserIdAndCompletedFalseAndDueDateLessThanEqual(userId, today.plusDays(3));
+        // Only count non-overdue incomplete reminders
+        long openCount = reminderRepo.countByUserIdAndCompletedFalseAndDueDateBetween(userId, today, today.plusDays(30));
+        long overdueCount = reminderRepo.countByUserIdAndCompletedFalseAndDueDateLessThan(userId, today);
+        long urgentCount = reminderRepo.countByUserIdAndCompletedFalseAndDueDateBetween(userId, today, today.plusDays(3));
         long completedCount = reminderRepo.countByUserIdAndCompletedTrue(userId);
         long studyDays = computeStudyDays(noteRepo.findStudyDatesByUserId(userId));
         return Map.of(
                 "noteCount", noteCount,
                 "openReminderCount", openCount,
+                "overdueReminderCount", overdueCount,
                 "urgentReminderCount", urgentCount,
                 "completedReminderCount", completedCount,
+                "today", today.toString(),
                 "offlineReady", true,
                 "studyDays", studyDays
         );
@@ -739,6 +828,7 @@ public class AppController {
             LocalDate dueDate,
             @Pattern(regexp = "high|medium|low") String priority,
             @Size(max = 200) String source,
-            Long relatedNoteId
+            Long relatedNoteId,
+            @Size(max = 20) String recurrence
     ) {}
 }

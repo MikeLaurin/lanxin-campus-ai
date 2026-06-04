@@ -35,6 +35,8 @@ public class Reminder {
     private String source;
     private Long relatedNoteId;
     private boolean completed;
+    private LocalDateTime completedAt;
+    private String recurrence = "none"; // none, weekly, biweekly, monthly
     private LocalDateTime createdAt;
 
     @PrePersist
@@ -70,6 +72,12 @@ public class Reminder {
 
     public boolean isCompleted() { return completed; }
     public void setCompleted(boolean completed) { this.completed = completed; }
+
+    public LocalDateTime getCompletedAt() { return completedAt; }
+    public void setCompletedAt(LocalDateTime completedAt) { this.completedAt = completedAt; }
+
+    public String getRecurrence() { return recurrence; }
+    public void setRecurrence(String recurrence) { this.recurrence = recurrence != null ? recurrence : "none"; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }

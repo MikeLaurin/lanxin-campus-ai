@@ -14,6 +14,8 @@ public record ReminderDto(
         String source,
         Long relatedNoteId,
         boolean completed,
+        LocalDateTime completedAt,
+        String recurrence,
         LocalDateTime createdAt
 ) {
     public static ReminderDto from(Reminder reminder) {
@@ -26,6 +28,8 @@ public record ReminderDto(
                 reminder.getSource(),
                 reminder.getRelatedNoteId(),
                 reminder.isCompleted(),
+                reminder.getCompletedAt(),
+                reminder.getRecurrence() != null ? reminder.getRecurrence() : "none",
                 reminder.getCreatedAt()
         );
     }

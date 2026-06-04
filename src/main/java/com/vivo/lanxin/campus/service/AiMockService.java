@@ -56,18 +56,128 @@ public class AiMockService {
     }
 
     public Reminder parseReminder(Map<String, Object> payload) {
-        String source = text(payload, "text", "下周三前提交数据结构实验报告，要求包含代码和复杂度分析。");
-        String course = inferCourse(source);
-        LocalDate due = inferDueDate(source);
-        String priority = source.contains("考试") || source.contains("截止") || source.contains("明天") ? "high" : "medium";
+        String source = text(payload, "text", "下周三前提交数据结构实验报告");
+        return parseSingleReminder(source);
+    }
+
+    /** Batch parse multiple DDL items from a single text. */
+    public List<Reminder> parseReminders(String source) {
+        if (source == null || source.isBlank()) return List.of();
+        LocalDate today = LocalDate.now();
+
+        // Try AI first — ask for JSON array
+        String systemPrompt = "你是 DDL 解析助手。用户会输入一段文本，其中可能包含多个待办事项（用换行、编号或分号分隔）。"
+                + "请将每个待办事项解析为一个 JSON 对象，返回 JSON 数组。每个对象的字段：\n"
+                + "title: 简洁标题(≤30字)\n"
+                + "dueDate: YYYY-MM-DD（今天=" + today + "，明天=" + today.plusDays(1) + "，后天=" + today.plusDays(2) + "，下周=" + today.plusDays(7) + "，无日期默认" + today.plusDays(3) + "）\n"
+                + "priority: high/medium/low\n"
+                + "category: 考试/作业/体测/活动/项目/个人等，不强行归类为课程\n"
+                + "description: 一句话概括(≤50字)\n"
+                + "只返回 JSON 数组。";
+
+        Optional<String> aiResult = lanxin.chat(systemPrompt, "请解析以下文本中的待办事项：\n" + source);
+
+        if (aiResult.isPresent()) {
+            try {
+                String json = aiResult.get().trim();
+                if (json.startsWith("```")) {
+                    json = json.replaceAll("```[a-z]*\\s*", "").replaceAll("```", "").trim();
+                }
+                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(json);
+                if (root.isArray()) {
+                    List<Reminder> reminders = new ArrayList<>();
+                    for (com.fasterxml.jackson.databind.JsonNode node : root) {
+                        Reminder r = buildReminderFromJson(node, source, today);
+                        reminders.add(r);
+                    }
+                    if (!reminders.isEmpty()) return reminders;
+                }
+                // Single object fallback
+                Reminder r = buildReminderFromJson(root, source, today);
+                return List.of(r);
+            } catch (Exception e) {
+                System.err.println("[AiMockService] Batch parse failed: " + e.getMessage());
+            }
+        }
+
+        // Fallback: split by lines / semicolons / numbered items
+        return parseRemindersFallback(source, today);
+    }
+
+    private Reminder parseSingleReminder(String source) {
+        LocalDate today = LocalDate.now();
+
+        // Compact AI prompt
+        String systemPrompt = "你是 DDL 解析助手。解析待办事项并返回 JSON："
+                + "{title, dueDate(YYYY-MM-DD, 今天=" + today + "), priority(high/medium/low), "
+                + "category(考试/作业/体测/活动/项目/个人等), description}。只返回 JSON。";
+
+        Optional<String> aiResult = lanxin.chat(systemPrompt, "解析：" + source);
+
+        if (aiResult.isPresent()) {
+            try {
+                String json = aiResult.get().trim();
+                if (json.startsWith("```")) {
+                    json = json.replaceAll("```[a-z]*\\s*", "").replaceAll("```", "").trim();
+                }
+                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                com.fasterxml.jackson.databind.JsonNode node = mapper.readTree(json);
+                return buildReminderFromJson(node, source, today);
+            } catch (Exception e) {
+                System.err.println("[AiMockService] Parse failed: " + e.getMessage());
+            }
+        }
+        return buildReminderFallback(source, today);
+    }
+
+    private Reminder buildReminderFromJson(com.fasterxml.jackson.databind.JsonNode node, String source, LocalDate today) {
+        String title = node.has("title") ? node.get("title").asText() : cleanTitle(source, "");
+        String priority = node.has("priority") ? node.get("priority").asText().toLowerCase() : inferPriority(source);
+        String category = node.has("category") ? node.get("category").asText() : inferCategory(source);
+        String description = node.has("description") ? node.get("description").asText() : source;
+        LocalDate due;
+        if (node.has("dueDate")) {
+            try { due = LocalDate.parse(node.get("dueDate").asText()); }
+            catch (Exception e) { due = inferDueDate(source); }
+        } else {
+            due = inferDueDate(source);
+        }
+
+        if ("专业课程".equals(category)) category = "";
 
         Reminder reminder = new Reminder();
-        reminder.setTitle(cleanTitle(source, course));
-        reminder.setCourse(course);
+        reminder.setTitle(title.length() > 60 ? title.substring(0, 60) : title);
+        reminder.setCourse(category);
         reminder.setDueDate(due);
         reminder.setPriority(priority);
+        reminder.setSource("AI 解析：" + (description.length() > 200 ? description.substring(0, 200) : description));
+        return reminder;
+    }
+
+    private Reminder buildReminderFallback(String source, LocalDate today) {
+        Reminder reminder = new Reminder();
+        reminder.setTitle(cleanTitle(source, ""));
+        reminder.setCourse(inferCategory(source));
+        reminder.setDueDate(inferDueDate(source));
+        reminder.setPriority(inferPriority(source));
         reminder.setSource("AI 解析：" + source);
         return reminder;
+    }
+
+    private List<Reminder> parseRemindersFallback(String source, LocalDate today) {
+        List<Reminder> reminders = new ArrayList<>();
+        // Split by: newlines, numbered items (1. or 1、), Chinese semicolons
+        String[] lines = source.split("[\\n;；]|(?<=\\d)[、.]\\s*");
+        for (String line : lines) {
+            String trimmed = line.trim();
+            if (trimmed.length() < 3) continue;
+            // Remove leading number/bullet
+            trimmed = trimmed.replaceFirst("^\\d+[、.]?\\s*", "");
+            if (trimmed.length() < 3) continue;
+            reminders.add(buildReminderFallback(trimmed, today));
+        }
+        return reminders.isEmpty() ? List.of(buildReminderFallback(source, today)) : reminders;
     }
 
     public Note processImageNote(byte[] imageBytes, String mimeType) {
@@ -509,21 +619,114 @@ public class AiMockService {
         return String.valueOf(value);
     }
 
+    // ── Enhanced Fallback Methods ─────────────────────────
+
+    private String inferCategory(String text) {
+        // Course detection (30+ common courses)
+        if (matchesAny(text, "高数", "极限", "微积分", "导数", "积分", "级数")) return "高等数学";
+        if (matchesAny(text, "线代", "线性代数", "矩阵", "行列式", "特征值")) return "线性代数";
+        if (matchesAny(text, "概率", "数理统计", "随机", "方差")) return "概率论";
+        if (matchesAny(text, "数据结构", "二叉树", "复杂度", "图论", "链表", "栈", "队列")) return "数据结构";
+        if (matchesAny(text, "计网", "网络", "TCP", "HTTP", "IP", "路由")) return "计算机网络";
+        if (matchesAny(text, "操作系统", "进程", "线程", "内存管理", "OS")) return "操作系统";
+        if (matchesAny(text, "数据库", "SQL", "MySQL", "查询")) return "数据库";
+        if (matchesAny(text, "Java", "Python", "C++", "编程", "代码", "编译")) return "编程";
+        if (matchesAny(text, "英语", "translation", "单词", "语法", "阅读")) return "英语";
+        if (matchesAny(text, "大物", "物理", "力学", "电磁", "光学")) return "大学物理";
+        if (matchesAny(text, "化学", "有机", "无机")) return "化学";
+        if (matchesAny(text, "马原", "思政", "近代史", "毛概")) return "思政课";
+        // Activity types
+        if (matchesAny(text, "体测", "体育", "跑步", "运动会", "体能")) return "体育";
+        if (matchesAny(text, "开会", "班会", "社团", "活动", "讲座", "报告")) return "活动";
+        if (matchesAny(text, "论文", "毕设", "开题", "答辩")) return "论文";
+        if (matchesAny(text, "实习", "面试", "简历")) return "求职";
+        if (matchesAny(text, "考试", "期末", "期中", "测验")) return "考试";
+        return "";
+    }
+
+    private boolean matchesAny(String text, String... keywords) {
+        for (String kw : keywords) {
+            if (text.contains(kw)) return true;
+        }
+        return false;
+    }
+
+    private String inferPriority(String text) {
+        String lower = text.toLowerCase();
+        if (matchesAny(lower, "考试", "截止", "明天", "后天", "今天", "体测", "紧急",
+                "马上", "立即", "立刻", "urgent", "重要", "答辩", "期末", "毕设")) return "high";
+        if (matchesAny(lower, "有空", "不急", "optional", "选做", "长期", "慢慢")) return "low";
+        return "medium";
+    }
+
+    private LocalDate inferDueDate(String text) {
+        LocalDate today = LocalDate.now();
+        if (text.contains("今天") || text.contains("今日")) return today;
+        if (text.contains("明天") || text.contains("明日")) return today.plusDays(1);
+        if (text.contains("后天") || text.contains("後天")) return today.plusDays(2);
+        if (text.contains("大后天")) return today.plusDays(3);
+
+        java.util.Map<String, Integer> weekDays = new java.util.LinkedHashMap<>();
+        weekDays.put("周一", 1); weekDays.put("星期二", 2);
+        weekDays.put("周三", 3); weekDays.put("星期四", 4);
+        weekDays.put("周五", 5); weekDays.put("星期六", 6);
+        weekDays.put("周日", 7); weekDays.put("星期天", 7);
+        weekDays.put("下周一", 8); weekDays.put("下周二", 9);
+        weekDays.put("下周三", 10); weekDays.put("下周四", 11);
+        weekDays.put("下周五", 12); weekDays.put("下周六", 13);
+        weekDays.put("下周日", 14);
+
+        for (java.util.Map.Entry<String, Integer> e : weekDays.entrySet()) {
+            if (text.contains(e.getKey())) {
+                int targetDayOfWeek = e.getValue() % 7;
+                if (targetDayOfWeek == 0) targetDayOfWeek = 7;
+                int currentDayOfWeek = today.getDayOfWeek().getValue();
+                int daysUntil = targetDayOfWeek - currentDayOfWeek;
+                if (e.getValue() > 7) daysUntil += 7;
+                if (daysUntil < 0) daysUntil += 7;
+                if (daysUntil == 0) daysUntil = 7;
+                return today.plusDays(Math.max(1, daysUntil));
+            }
+        }
+
+        Matcher matcher = DAYS_PATTERN.matcher(text);
+        if (matcher.find()) {
+            return today.plusDays(Long.parseLong(matcher.group(1)));
+        }
+
+        if (text.contains("下周") || text.contains("下星期")) return today.plusDays(7);
+        if (text.contains("这周") || text.contains("本周")) return today.plusDays(3);
+        if (text.contains("周末") || text.contains("周六") || text.contains("周日") || text.contains("星期日")) {
+            int daysToWeekend = 6 - today.getDayOfWeek().getValue();
+            if (daysToWeekend <= 0) daysToWeekend += 7;
+            return today.plusDays(Math.max(1, daysToWeekend));
+        }
+        if (text.contains("月底") || text.contains("月末")) {
+            return today.withDayOfMonth(today.lengthOfMonth());
+        }
+        if (text.contains("月初")) {
+            return today.plusMonths(1).withDayOfMonth(1);
+        }
+
+        return today.plusDays(1);
+    }
+
+    private String cleanTitle(String text, String course) {
+        if (text == null || text.isBlank()) return "未命名待办";
+        String trimmed = text.trim();
+        if (trimmed.length() <= 30) return trimmed;
+        if (course != null && !course.isBlank()) {
+            return course + "：" + trimmed.substring(0, 24) + "...";
+        }
+        return trimmed.substring(0, 28) + "...";
+    }
+
     private String inferCourse(String text) {
-        if (text.contains("高数") || text.contains("极限") || text.contains("函数")) {
-            return "高等数学";
-        }
-        if (text.contains("数据结构") || text.contains("二叉树") || text.contains("复杂度")) {
-            return "数据结构";
-        }
-        if (text.contains("英语") || text.toLowerCase(Locale.ROOT).contains("translation")) {
-            return "大学英语";
-        }
-        return "专业课程";
+        return inferCategory(text);
     }
 
     private String summaryFor(String course, String rawText) {
-        return "已将“" + course + "”课堂内容整理为标题、要点、公式/术语和复习标签，原始内容保留用于回看。";
+        return "已将" + course + "课堂内容整理为标题、要点、公式/术语和复习标签，原始内容保留用于回看。";
     }
 
     private List<String> keyPointsFor(String course, String rawText) {
@@ -568,29 +771,5 @@ public class AiMockService {
             builder.append("- ").append(point).append("\n");
         }
         return builder.toString().trim();
-    }
-
-    private LocalDate inferDueDate(String text) {
-        if (text.contains("明天")) {
-            return LocalDate.now().plusDays(1);
-        }
-        if (text.contains("后天")) {
-            return LocalDate.now().plusDays(2);
-        }
-        Matcher matcher = DAYS_PATTERN.matcher(text);
-        if (matcher.find()) {
-            return LocalDate.now().plusDays(Long.parseLong(matcher.group(1)));
-        }
-        if (text.contains("下周")) {
-            return LocalDate.now().plusDays(7);
-        }
-        return LocalDate.now().plusDays(3);
-    }
-
-    private String cleanTitle(String text, String course) {
-        if (text.length() <= 24) {
-            return text;
-        }
-        return course + "：" + text.substring(0, 20) + "...";
     }
 }

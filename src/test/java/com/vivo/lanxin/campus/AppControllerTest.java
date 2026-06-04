@@ -69,7 +69,9 @@ class AppControllerTest {
                         .content("{\"text\":\"submit data structure lab in 2 days\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").exists())
-                .andExpect(jsonPath("$.priority").value("medium"));
+                .andExpect(jsonPath("$.priority").exists())
+                .andExpect(jsonPath("$.title").exists())
+                .andExpect(jsonPath("$.dueDate").exists());
     }
 
     @Test

@@ -142,19 +142,46 @@ src/test/resources/application.yml
 - **上传文档提取**：支持 PDF/TXT/DOCX（最大 20MB），调用 `/rag/documents/extract` 提取文本，可保存为笔记或加入知识库
 
 笔记管理：
-- 多级文件夹树：横向 + 纵向滚动条，长路径完整展示，节点折叠/展开
-- 搜索：关键词搜索，按文件夹路径筛选
+- 多级文件夹树：横向 + 纵向滚动条，长路径完整展示，节点折叠/展开，前缀匹配 + 去重查询
+- 搜索：关键词搜索，按 folderPath 精确匹配和前缀筛选
+- `Note` 模型新增 `folderPath` 字段 + DB 索引 `idx_notes_user_folder`，`NoteDto` 输出包含 `folderPath`
 - 编辑/删除：编辑弹窗支持 AI 结构化（提取要点、公式、标签、思维导图），删除需二次确认
 - 图片灯箱：上传图片点击放大预览
 - DTO 输出：`NoteDto` 不暴露 `userId`、`ragDocumentId`
 
 ### DDL 管理
 
-- 手动创建：标题、课程、截止日期、优先级（high/medium/low）
-- AI 文本解析：输入自然语言作业要求 → `/reminders/parse` → 自动提取标题、日期、优先级
-- 今日待办：窗口从 1 天延长至 3 天，按截止日期排列
-- 优先级排序、标记完成、删除
-- 今日 DDL 列表和紧急任务计数展示在首页仪表盘
+创建方式：
+- AI 智能解析（支持单条和批量）：POST `/reminders/parse`（单条）和 `/reminders/parse-preview`（批量预览，不保存）
+  - AI 解析使用精简 prompt（~120 tokens），调用 `LanxinApiClient.chat()` 返回 JSON
+  - 返回 title、dueDate、priority、category、description 五个字段
+  - 批量解析自动按换行/编号/分号拆分，返回 JSON 数组
+  - 前端解析完成后弹出确认卡片（可移除/修改），确认后调用 `/reminders/batch-save` 批量保存
+  - AI 降级逻辑：30+ 课程/类别关键词匹配、20+ 日期表达识别、智能优先级推断
+  - 不再强行归类为"专业课程"：体测→体育、开会→活动、论文→论文
+- 手动创建：弹窗表单（标题、类别、日期、优先级、备注），调 POST `/reminders`
+- 快捷示例：🏃 体测 / 📐 交作业 / 🔬 实验报告 三个一键填入按钮
+
+管理与交互：
+- 未完成/已完成双 Tab，筛选条（全部/高优先级/本周/已过期）
+- 标记完成自动记录 `completedAt`（`PUT /reminders/{id}/complete`），撤销完成（`PUT /reminders/{id}/uncomplete`）
+- 编辑 DDL：`PUT /reminders/{id}`，可修改标题、日期、优先级、类别，前端 ✎ 按钮 → 复用手动弹窗
+- 删除二次确认 + 撤销 Toast（5 秒内可撤销 `showUndoToast()`）
+- 已完成列表分页（`GET /reminders?includeCompleted=true&page=0&size=20`），加载更多按钮
+- DDL 卡片可点击展开/收起完整描述
+
+日期与统计：
+- 今日待办 `GET /reminders/today`：dueDate BETWEEN today AND today+7，不含过期项
+- 过期 DDL：`GET /reminders/overdue` 返回列表 + 计数
+- 首页过期警告条：`renderOverdueWarning(count)` 显示"你有 N 个已过期的 DDL"
+- Dashboard `openReminderCount` 只统计非过期项（today ≤ dueDate ≤ today+30）
+- Dashboard 新增 `overdueReminderCount` 和 `today` 字段
+- 底部导航 DDL 角标：`renderNavBadge(stats)` 显示过期+紧急总数
+
+数据模型：
+- `Reminder` 新增 `completedAt`（完成时间）、`recurrence`（重复模式：none/weekly/biweekly/monthly）
+- `ReminderDto` 包含完整字段输出
+- 新增 Repository 查询：`dueDateBetween`、`dueDateLessThan`、`completedTrueOrderByCompletedAtDesc`（分页）、`countByCompletedTrueAndCompletedAtBetween`
 
 ### AI 对话（小蓝聊天）
 
@@ -175,7 +202,11 @@ src/test/resources/application.yml
 5. 删除：`DELETE /rag/documents/{id}`，级联删除 chunks
 
 文档处理：
-- PDF 使用系统 `pdftotext` 提取（Git for Windows / poppler-utils），TXT/MD 直接读取
+- PDF 使用系统 `pdftotext` 提取（Git for Windows / poppler-utils），DOCX 通过 ZipInputStream + XML DOM 解析（`word/document.xml`），TXT/MD 直接读取
+- `extractDocxText()` 解析 OOXML 格式，从 `<w:p>` 段落和 `<w:t>` 文本节点提取内容，禁用外部实体防 XXE
+- `extractText()` 统一入口根据 fileType 分发到 PDF/DOCX/TXT 处理器
+- `ingestText()` 接受已提取文本直接入库（`doIngest()`），与 `ingestDocument()`（从 InputStream 提取）分离
+- `doIngest()` 内部方法：分块 → 批量保存 → 标记 READY
 - 按 ~1000 字切片，~200 字重叠，批量保存（5 个/批）
 - embedding 向量化：支持独立 embedding 模型配置，调用 `/embeddings` 生成向量并序列化存储
 - 检索：向量余弦相似度优先，embedding 不可用时关键词匹配兜底
@@ -205,12 +236,20 @@ src/test/resources/application.yml
 - JS 微交互：
   - 按钮波纹 `addRipple()`：点击时从鼠标位置扩散圆形波纹
   - 数字滚动 `animateCounter()`：700ms easeOutCubic 动画
-  - 打字指示器：三圆点弹跳动画
-  - Toast 消息：底部滑入，2.2s 自动消失
-  - 悬浮球：`pointerdown/pointermove/pointerup` 拖拽 + 松手吸附左右边缘 + 位置 localStorage 持久化
+  - 打字指示器 `showTyping()/hideTyping()`：三圆点弹跳动画
+  - Toast 消息 `showToast()`：底部滑入，2.2s 自动消失
+  - 撤销 Toast `showUndoToast()`：带撤销按钮，5 秒内可点击撤销（完成/删除操作后出现）
+  - 导航角标 `renderNavBadge()`：DDL 按钮红色数字角标
+  - 过期警告 `renderOverdueWarning()`：首页过期 DDL 警告条
+  - 悬浮球：`pointerdown/pointermove/pointerup` 拖拽 + 松手吸附左右边缘 + 位置 localStorage 持久化 + bot 头像图片 (`assets/xiaolan-bot-head.png`)
+  - DDL 解析预览 `renderParsePreview()`：AI 批量解析结果确认卡片
+  - 字数统计 `$("#ddlCharCount")`：DDL 输入框实时字数显示
+  - 快捷示例：DDL 输入框三个一键填入按钮
+  - DDL 筛选 `switchDdlFilter()`：全部/高优先级/本周/已过期
+  - DDL 卡片展开：点击卡片展开/收起完整描述
 - 内容预览切换：`switchContentPreview()` 在「预览」（`renderMarkdown()` 渲染）和「原文」（textarea 编辑）间切换
 - Markdown 渲染：`renderMarkdown()` 处理 #标题、**加粗**、- 列表、`---` 分割线、段落、换行
-- LaTeX 数学公式：KaTeX 渲染 `$$...$$` 显示公式和 `$...$` 行内公式
+- LaTeX 数学公式：KaTeX 渲染，支持四种分隔符：`$$...$$`（显示）、`$...$`（行内）、`\[...\]`（LaTeX 显示）、`\(...\)`（LaTeX 行内）
 - 图片灯箱：点击预览图放大，Escape 关闭
 - 版本缓存：`styles.css?v=N` 和 `app.js?v=N` 控制前端缓存刷新
 
@@ -249,8 +288,8 @@ src/test/resources/application.yml
 JPA 声明的复合索引：
 
 - `users.username`（唯一）
-- `notes`: `userId + updatedAt`、`userId + createdAt`、`userId + course`、`userId + folderPath`
-- `reminders`: `userId + dueDate`、`userId + completed + dueDate`、`userId + priority`
+- `notes`: `userId + updatedAt`、`userId + createdAt`、`userId + course`、`userId + folderPath`（新增）
+- `reminders`: `userId + dueDate`、`userId + completed + dueDate`、`userId + priority`（新增 `completedAt` 和 `recurrence` 字段）
 - `documents`: `userId + createdAt`、`userId + status`
 - `document_chunks`: `documentId`、`userId`
 
@@ -369,21 +408,42 @@ Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
 - JVM 堆内存已配置 1GB（`-Xmx1024m`），大文件 embedding 时注意 OOM
 - 文档分块批量保存改为 5 个/批，避免大批量 embedding 内存溢出
 - 补课包 prompt 已优化，要求详细的知识点解析（含概念解释、误区）、复习方法（含时间分配、验收标准）、自测题目（含答案解析）
-- 前端 `renderMarkdown()` 支持 #标题、**加粗**、列表、`$$...$$` LaTeX 数学公式（KaTeX 渲染）
+- 前端 `renderMarkdown()` 支持 #标题、**加粗**、列表、LaTeX 数学公式（KaTeX 渲染，支持 `$$`/`$`/`\[`/`\(` 四种分隔符）
 - 前端是浏览器演示页，后续迁移 vivo 快应用时主要复用后端 API
 - 前端图标统一使用 emoji，不手写 CSS 图标类
 - 按钮波纹 `addRipple()`、数字滚动 `animateCounter()`、打字指示器 `showTyping()/hideTyping()` 已实现
+- 撤销 Toast `showUndoToast()` 支持完成/删除后 5 秒内撤销
+- 导航角标 `renderNavBadge()`：DDL 底部导航红点数字角标
+- 过期警告 `renderOverdueWarning()`：首页过期 DDL 警告条
+- DDL 解析预览 `renderParsePreview()`：AI 批量解析结果确认（支持移除/修改后批量保存）
+- DDL 卡片点击展开/收起完整描述（`.ddl-card.expanded` CSS class 切换）
 - 悬浮球定位持久化在 `localStorage.lanxin_bubble_pos`
 - 笔记文件夹树项使用 `width: fit-content; min-width: 100%` 实现长路径不截断
 - `StreamingResponseBody` lambda 内异常不会被 `@RestControllerAdvice` 捕获，流式方法内部需要独立 try-catch
 - 拍照识别的 `processImage` 端点在识别时就保存了笔记（含 RAG 索引），前端保存时先 DELETE 旧笔记再 POST 新笔记来去重
+- DDL 解析 AI prompt 已精简到 ~120 tokens，降级逻辑覆盖 30+ 课程/类别和 20+ 日期表达
+- `Reminder` 模型新增 `completedAt`（完成时间）和 `recurrence`（重复模式）字段
+- `Note` 模型新增 `folderPath` 字段，`NoteDto` 输出包含此字段，DB 索引 `idx_notes_user_folder`
+- `NoteRepository` 新增 `findByUserIdAndFolderPath`、`findByUserIdAndFolderPathPrefix`、`findDistinctFolderPathsByUserId`
+- `RagService` 新增 `extractDocxText()` 支持 DOCX 文件，`extractText()` 统一提取入口，`ingestText()` 接受预提取文本
+- 悬浮球使用 `assets/xiaolan-bot-head.png` 作为 bot 头像，加载失败不影响功能
 
 ## 当前验证记录
 
-最近一次验证：
+最近一次验证（2026-06-04）：
 
 - `mvn test`：9 个集成测试全部通过
 - `node --check src/main/resources/static/app.js`：通过
+- DDL 全面优化全链路验证通过：
+  - 手动创建、编辑、删除（二次确认 + 撤销 Toast）、完成/撤销完成
+  - AI 单条/批量解析（预览→确认→批量保存）
+  - 已完成分页、筛选条（全部/高优/本周/过期）
+  - 导航角标实时更新、过期警告条
+  - completedAt 自动记录、delete API 返回 204
+  - LaTeX `\(\)`/`\[\]` 分隔符渲染
+- Note folderPath 增强：模型字段 + 数据库索引 + DTO 输出 + 前缀查询
+- DOCX 文档解析：ZipInputStream + XML DOM 提取 word/document.xml
+- 悬浮球 bot 头像图片 (`assets/xiaolan-bot-head.png`)
 - 补课包详细输出 + Markdown 渲染 + 流式超时修复全链路验证通过
 - UI v3 动效升级：浮动光斑、流动渐变、弹簧动画、波纹反馈、数字滚动、打字指示器全链路验证通过
 - 聊天抽屉双Tab + 补课包追问聊天 + 保存为笔记弹窗全链路通过
@@ -397,7 +457,7 @@ Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
 - 用户资料接口
 - AI 笔记处理
 - `NoteDto` 不暴露内部字段
-- DDL 解析和首页待办
+- DDL 解析（含 AI 智能解析）和首页待办
 - 笔记列表
 - 非法笔记请求返回 400
 

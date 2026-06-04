@@ -40,6 +40,8 @@ export APP_JWT_SECRET="请替换为生产环境强随机密钥"
 
 ```bash
 mvn spring-boot:run
+
+
 ```
 
 浏览器访问：
@@ -76,21 +78,30 @@ java -jar target/campus-ai-1.0.0.jar
 
 ### 用户与首页
 - 用户注册、登录、刷新令牌、退出，BCrypt 密码加密 + HMAC-SHA256 JWT 双 token 机制
-- 首页仪表盘：笔记数、待办数、连续学习天数、今日 DDL（3 天内）、最近笔记，统计数字滚动动画
+- 首页仪表盘：笔记数、待办数（不含过期）、连续学习天数、今日 DDL（7 天内）、过期 DDL 警告条、最近笔记，统计数字滚动动画
 
 ### 课堂笔记
 - 三种创建方式：手写笔记、拍照 AI 识别、上传文档提取
-- 笔记归档、搜索、编辑、删除（二次确认），文件夹树支持多级目录
+- 笔记归档、搜索、编辑、删除（二次确认），文件夹树支持多级目录（folderPath 字段 + 前缀查询）
 - 笔记内容「预览」/「原文」双模式切换，预览区 Markdown 格式化渲染
 - AI 结构化处理：提取标题、摘要、知识点、公式、标签和思维导图
 - 图片上传点击放大灯箱预览，拍照识别后编辑保存（自动去重）
 - 笔记创建/更新后自动写入 RAG 知识库并生成 embedding 向量
 
 ### DDL 管理
-- 手动创建待办事项，设置标题、课程、截止日期、优先级
-- AI 文本解析：输入自然语言作业要求，自动提取截止日期和优先级
-- 今日提醒窗口从 1 天延长至 3 天，临近任务一览
-- 优先级排序、标记完成、删除
+- 三种创建方式：AI 智能解析（支持批量）、手动创建（弹窗表单）、快捷示例模板
+- AI 解析预览：解析结果确认弹窗，支持移除/修改后再批量保存，解析前不会直接入库
+- AI 智能分类：自动识别事项类别（考试/作业/体测/活动/论文/体育等），不再错误归类为"专业课程"
+- 智能日期识别：支持"明天/后天/下周一/周末/月底/3天后"等 20+ 种日期表达
+- 未完成/已完成双 Tab 管理，支持筛选（全部/高优先级/本周/已过期）
+- 编辑 DDL：点击 ✎ 按钮可修改标题、日期、优先级、类别
+- 标记完成自动记录完成时间，支持撤销完成
+- 删除二次确认 + 撤销 Toast（5 秒内可撤销）
+- 底部导航 DDL 角标实时显示待办数量
+- 首页过期警告条（"你有 N 个已过期的 DDL"）+ 过期项红色高亮
+- 已完成列表分页加载（每页 20 条）
+- 今日提醒只显示未过期项（dueDate ≥ 今天），过期项单独统计
+- 首页统计数字不包含已过期 DDL
 
 ### AI 对话（小蓝聊天）
 - 普通对话和 RAG 知识库增强对话，均支持流式输出（SSE）
@@ -100,8 +111,8 @@ java -jar target/campus-ai-1.0.0.jar
 - 401 自动刷新 token，刷新后提示重发而非重复提交
 
 ### RAG 知识库
-- 上传 PDF（pdftotext 解析）、TXT/MD 文档，自动分块切片（~1000 字/块，200 字重叠）
-- 文档提取端点：仅提取文本不入库，前端可预览后选择保存为笔记或加入知识库
+- 上传 PDF（pdftotext 解析）、DOCX（ZipXML 解析）、TXT/MD 文档，自动分块切片（~1000 字/块，200 字重叠）
+- 文档提取端点：仅提取文本不入库（支持 PDF/DOCX/TXT），前端可预览后选择保存为笔记或加入知识库
 - embedding 向量化：支持独立配置 embedding 模型，生成向量后存库
 - 检索策略：向量余弦相似度优先，embedding 不可用时关键词匹配兜底
 - 文档列表、状态展示（就绪/处理中/失败）、删除
@@ -122,8 +133,8 @@ java -jar target/campus-ai-1.0.0.jar
 - JS 微交互：按钮水波纹（ripple）、统计数字滚动计数、AI 回复等待动画
 - Toast 消息提示组件，全局统一反馈
 - 防重复点击：所有异步操作按钮 loading 禁用态
-- Markdown 渲染：支持 #标题、**加粗**、- 列表、$$LaTeX$$ 数学公式（KaTeX）
-- 悬浮球拖拽定位 + 吸附边缘 + 点击打开聊天抽屉
+- Markdown 渲染：支持 #标题、**加粗**、- 列表、数学公式（KaTeX 渲染，支持 `$$`/`$`/`\[`/`\(` 四种 LaTeX 分隔符）
+- 悬浮球拖拽定位 + 吸附边缘 + 点击打开聊天抽屉（使用小蓝头像图片）
 - Ctrl+K 快捷键唤起聊天抽屉
 
 ### 安全与稳定性
@@ -198,13 +209,19 @@ Authorization: Bearer <accessToken>
 
 ### DDL
 
-- `GET /api/v1/reminders`
+- `GET /api/v1/reminders?includeCompleted=&page=&size=`
 - `POST /api/v1/reminders`
+- `PUT /api/v1/reminders/{id}` — 编辑 DDL
 - `DELETE /api/v1/reminders/{id}`
-- `PUT /api/v1/reminders/{id}/complete`
-- `GET /api/v1/reminders/today`
-- `GET /api/v1/reminders/priority`
-- `POST /api/v1/reminders/parse`
+- `PUT /api/v1/reminders/{id}/complete` — 标记完成（自动记录 completedAt）
+- `PUT /api/v1/reminders/{id}/uncomplete` — 撤销完成
+- `GET /api/v1/reminders/today` — 今日至 7 天内未过期待办
+- `GET /api/v1/reminders/overdue` — 已过期 DDL 列表与计数
+- `GET /api/v1/reminders/priority` — 按优先级排序
+- `POST /api/v1/reminders/parse` — AI 单条解析
+- `POST /api/v1/reminders/parse-preview` — AI 批量解析预览（不保存）
+- `POST /api/v1/reminders/parse-batch` — AI 批量解析并保存
+- `POST /api/v1/reminders/batch-save` — 批量保存确认后的解析结果
 - `POST /api/v1/ai/reminder/parse`
 
 ### AI 与 RAG
@@ -288,7 +305,7 @@ RAG 上传 PDF 需要系统可执行文件 `pdftotext`。
 mvn test
 ```
 
-当前集成测试覆盖登录、JWT 返回、用户信息、笔记处理、DTO 输出隔离、DDL 解析、首页待办、参数校验等核心路径。测试使用 H2 内存数据库。
+当前集成测试覆盖登录、JWT 返回、用户信息、笔记处理、DTO 输出隔离、DDL 解析（含 AI 智能解析）、首页待办、参数校验等核心路径。测试使用 H2 内存数据库。
 
 ## 开发注意事项
 

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>蓝心校园 AI 管家</title>
-  <link rel="stylesheet" href="/styles.css?v=12">
+  <link rel="stylesheet" href="/styles.css?v=14">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
 </head>
@@ -68,6 +68,11 @@
             DDL 管理
           </button>
         </div>
+        <div class="ddl-overdue-warning" id="homeOverdueWarning" style="display:none;">
+          <span>⚠️</span>
+          <span id="homeOverdueText"></span>
+          <button class="text-button" data-nav="tasks" style="color:var(--danger);font-weight:600;">查看</button>
+        </div>
         <section class="section-block">
           <div class="section-head">
             <h2>今日待办</h2>
@@ -121,25 +126,103 @@
       <div class="tab-panel" data-panel="tasks">
         <section class="section-block">
           <div class="section-head">
-            <h2>朋友管家式时间管理</h2>
-            <span class="status-pill">优先级排序</span>
+            <h2>智能 DDL 解析</h2>
+            <div style="display:flex;gap:6px;">
+              <span class="status-pill">AI 自动分析</span>
+              <button class="text-button" id="openManualDdl" style="font-size:12px;color:var(--primary);">+ 手动添加</button>
+            </div>
           </div>
-          <textarea id="ddlInput" rows="4" placeholder="输入作业要求，例如：下周前提交高数第3章习题，截止很急。"></textarea>
+          <textarea id="ddlInput" rows="3" placeholder="输入你的待办事项，AI 自动分析。支持批量：&#10;1. 明天体测&#10;2. 下周一交高数作业&#10;3. 周五前完成实验报告"></textarea>
+          <div class="ddl-input-footer">
+            <span class="ddl-char-count" id="ddlCharCount">0 / 2000</span>
+            <div class="ddl-quick-examples">
+              <button class="ddl-example-btn" data-example="明天要体测">🏃 体测</button>
+              <button class="ddl-example-btn" data-example="下周一交高数作业">📐 交作业</button>
+              <button class="ddl-example-btn" data-example="周五前完成实验报告并提交">🔬 实验报告</button>
+            </div>
+          </div>
           <div class="button-row">
             <button class="primary-action" id="parseDdl">
-              <span class="spark-icon"></span>
-              解析 DDL
+              <span class="spark-icon"></span>解析 DDL
             </button>
-            <button class="secondary-action" id="addDdlSample">示例要求</button>
+            <button class="secondary-action" id="clearDdlInput">清空</button>
           </div>
         </section>
+
+        <!-- Parse preview (shown after AI parsing) -->
+        <section class="section-block" id="parsePreviewBlock" style="display:none;">
+          <div class="section-head">
+            <h2>AI 解析结果</h2>
+            <span class="status-pill" style="background:var(--success-bg);color:var(--success);">确认后保存</span>
+          </div>
+          <div id="parsePreviewList"></div>
+          <div class="button-row" style="margin-top:12px;">
+            <button class="primary-action" id="confirmParseResults">确认保存全部</button>
+            <button class="secondary-action" id="cancelParseResults">取消</button>
+          </div>
+        </section>
+
         <section class="section-block">
           <div class="section-head">
-            <h2>DDL 列表</h2>
-            <button class="text-button" id="sortPriority">按优先级</button>
+            <h2>DDL 管理</h2>
+            <div class="ddl-tabs" id="ddlTabs">
+              <button class="ddl-tab active" data-ddl-tab="incomplete">未完成</button>
+              <button class="ddl-tab" data-ddl-tab="completed">已完成</button>
+            </div>
+          </div>
+          <div class="ddl-filter-bar" id="ddlFilterBar">
+            <button class="ddl-filter-btn active" data-filter="all">全部</button>
+            <button class="ddl-filter-btn" data-filter="high">🔴 高优先</button>
+            <button class="ddl-filter-btn" data-filter="week">📅 本周</button>
+            <button class="ddl-filter-btn" data-filter="overdue">⚠️ 已过期</button>
           </div>
           <div class="item-list" id="taskList"></div>
+          <div id="taskLoadMore" style="text-align:center;padding:12px;display:none;">
+            <button class="text-button" id="loadMoreTasks" style="color:var(--primary);">加载更多...</button>
+          </div>
         </section>
+      </div>
+
+      <!-- Manual DDL Modal -->
+      <div class="modal-overlay" id="manualDdlOverlay">
+        <div class="modal-card">
+          <div class="modal-header">
+            <h2 id="manualDdlModalTitle">手动添加 DDL</h2>
+            <button class="modal-close" id="closeManualDdl">x</button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label>标题 *</label>
+              <input type="text" id="manualDdlTitle" placeholder="如：完成高等数学第三章习题">
+            </div>
+            <div class="form-group">
+              <label>类别</label>
+              <input type="text" id="manualDdlCategory" placeholder="如：高等数学、考试、体测、活动...">
+            </div>
+            <div class="form-row-2col">
+              <div class="form-group">
+                <label>截止日期</label>
+                <input type="date" id="manualDdlDate">
+              </div>
+              <div class="form-group">
+                <label>优先级</label>
+                <select id="manualDdlPriority">
+                  <option value="high">🔴 高优先级</option>
+                  <option value="medium" selected>🟡 中优先级</option>
+                  <option value="low">🟢 低优先级</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>备注</label>
+              <input type="text" id="manualDdlNote" placeholder="补充说明（可选）">
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="secondary-action" id="cancelManualDdl">取消</button>
+            <button class="primary-action" id="saveManualDdl">保存</button>
+          </div>
+        </div>
       </div>
 
       <!-- My Panel -->
@@ -188,7 +271,7 @@
     <nav class="bottom-nav" aria-label="主导航">
       <button class="active" data-nav="home"><span>🏠</span><small>首页</small></button>
       <button data-nav="notes"><span>📝</span><small>笔记</small></button>
-      <button data-nav="tasks"><span>⏰</span><small>DDL</small></button>
+      <button data-nav="tasks" id="navDdlBtn"><span>⏰</span><small>DDL</small><span class="nav-badge" id="navDdlBadge" style="display:none;">0</span></button>
       <button data-nav="report"><span>👤</span><small>我的</small></button>
     </nav>
   </main>
@@ -483,6 +566,6 @@
     <img id="imageLightboxImg" alt="Preview">
   </div>
 
-  <script src="/app.js?v=26"></script>
+  <script src="/app.js?v=28"></script>
 </body>
 </html>
