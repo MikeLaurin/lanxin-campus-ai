@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>蓝心校园 AI 管家</title>
-  <link rel="stylesheet" href="/styles.css?v=14">
+  <link rel="stylesheet" href="/styles.css?v=17">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
 </head>
@@ -96,9 +96,11 @@
             <button class="notes-subtab active" data-notes-tab="notes">笔记</button>
             <button class="notes-subtab" data-notes-tab="knowledge">知识库</button>
           </div>
-          <div style="display:flex;gap:8px;align-items:center;">
-            <input class="search-input" id="noteSearch" placeholder="搜索笔记..." style="max-width:200px;">
-            <button class="primary-action" id="openCreateNote" style="min-height:40px;font-size:13px;white-space:nowrap;">+ 新建</button>
+          <div class="notes-actions">
+            <input class="search-input" id="noteSearch" placeholder="搜索笔记...">
+            <button class="primary-action note-create-button" id="openCreateNote" title="新建笔记" aria-label="新建笔记">
+              <span class="note-create-icon">+</span>
+            </button>
           </div>
         </div>
         <!-- Notes sub-panel -->
@@ -497,7 +499,10 @@
         </div>
         <div class="form-group">
           <label>文件夹路径</label>
-          <input type="text" id="editNoteFolder" placeholder="如：数学/线性代数">
+          <select id="editNoteFolderSelect">
+            <option value="">📂 （根目录）</option>
+          </select>
+          <input type="text" id="editNoteFolderCustom" placeholder="输入自定义路径，如：数学/线性代数" style="display:none;margin-top:6px;">
         </div>
         <div class="form-group">
           <label>标签</label>
@@ -566,6 +571,6 @@
     <img id="imageLightboxImg" alt="Preview">
   </div>
 
-  <script src="/app.js?v=28"></script>
+  <script src="/app.js?v=29"></script>
 </body>
 </html>

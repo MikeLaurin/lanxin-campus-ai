@@ -79,15 +79,39 @@ src/main/java/com/vivo/lanxin/campus/CampusAiApplication.java
 Controller 和 Web 支撑：
 
 ```text
-src/main/java/com/vivo/lanxin/campus/web/AppController.java
+src/main/java/com/vivo/lanxin/campus/web/AiController.java       # AI 对话、补课包、笔记处理
+src/main/java/com/vivo/lanxin/campus/web/AuthController.java     # 登录、注册、刷新令牌
+src/main/java/com/vivo/lanxin/campus/web/NoteController.java     # 笔记 CRUD、文件夹树、批量同步
+src/main/java/com/vivo/lanxin/campus/web/RagController.java      # 文档上传、提取、入库
+src/main/java/com/vivo/lanxin/campus/web/ReminderController.java # DDL 解析、批量、完成/撤销
+src/main/java/com/vivo/lanxin/campus/web/ReportController.java   # 学习周报、仪表盘统计
+src/main/java/com/vivo/lanxin/campus/web/ControllerUtils.java    # DTO 组装、文件夹树构建等工具方法
 src/main/java/com/vivo/lanxin/campus/web/GlobalExceptionHandler.java
 src/main/java/com/vivo/lanxin/campus/web/ApiException.java
 src/main/java/com/vivo/lanxin/campus/web/AiServiceException.java
+src/main/java/com/vivo/lanxin/campus/web/RateLimitException.java
 src/main/java/com/vivo/lanxin/campus/web/RateLimitInterceptor.java
 src/main/java/com/vivo/lanxin/campus/web/WebConfig.java
 src/main/java/com/vivo/lanxin/campus/web/InputSanitizer.java
 src/main/java/com/vivo/lanxin/campus/web/NoteDto.java
 src/main/java/com/vivo/lanxin/campus/web/ReminderDto.java
+```
+
+请求 DTO（从 AppController 拆分）：
+
+```text
+src/main/java/com/vivo/lanxin/campus/web/LoginRequest.java
+src/main/java/com/vivo/lanxin/campus/web/RegisterRequest.java
+src/main/java/com/vivo/lanxin/campus/web/RefreshRequest.java
+src/main/java/com/vivo/lanxin/campus/web/NoteRequest.java
+src/main/java/com/vivo/lanxin/campus/web/NoteProcessRequest.java
+src/main/java/com/vivo/lanxin/campus/web/ReminderRequest.java
+src/main/java/com/vivo/lanxin/campus/web/ChatRequest.java
+src/main/java/com/vivo/lanxin/campus/web/MakeupRequest.java
+src/main/java/com/vivo/lanxin/campus/web/MakeupChatRequest.java
+src/main/java/com/vivo/lanxin/campus/web/TextRequest.java
+src/main/java/com/vivo/lanxin/campus/web/IngestTextRequest.java
+src/main/java/com/vivo/lanxin/campus/web/SourceSelectionRequest.java
 ```
 
 业务服务：
@@ -145,7 +169,7 @@ src/test/resources/application.yml
 - 多级文件夹树：横向 + 纵向滚动条，长路径完整展示，节点折叠/展开，前缀匹配 + 去重查询
 - 搜索：关键词搜索，按 folderPath 精确匹配和前缀筛选
 - `Note` 模型新增 `folderPath` 字段 + DB 索引 `idx_notes_user_folder`，`NoteDto` 输出包含 `folderPath`
-- 编辑/删除：编辑弹窗支持 AI 结构化（提取要点、公式、标签、思维导图），删除需二次确认
+- 编辑/删除：编辑弹窗支持 AI 结构化（提取要点、公式、标签、思维导图），文件夹路径下拉选择已有路径（可自定义），删除需二次确认
 - 图片灯箱：上传图片点击放大预览
 - DTO 输出：`NoteDto` 不暴露 `userId`、`ragDocumentId`
 
@@ -213,7 +237,8 @@ src/test/resources/application.yml
 
 笔记联动：
 - 创建/更新笔记时调用 `indexNote()` 自动写入 RAG，删除笔记时调用 `deleteNoteDocument()` 清理
-- `reindexNote()` 先删旧文档再重建，用于笔记更新场景（当前未包 try-catch，更新时可能抛异常）
+- `reindexNote()` 先删旧文档再重建，用于笔记更新场景
+- `updateNote` 中的 `reindexNote` 调用已包 try-catch（2026-06-06 修复），RAG 故障不影响笔记保存
 
 ### 逃课补课包
 
@@ -267,7 +292,7 @@ src/test/resources/application.yml
 - 登录、注册、笔记、DDL、聊天、补课包等请求体使用 Jakarta Bean Validation（`@Valid` + `@NotBlank`/`@Size`/`@Pattern`）
 - `InputSanitizer.clean()`：去 `<script>` 标签、HTML 标签、控制字符，trim 并截断到指定长度
 - `InputSanitizer.nullable()`：同 clean + 空字符串转 null
-- `InputSanitizer.cleanList()`：批量清洗 + 去空白 + 限条数
+- `InputSanitizer.cleanList()`：批量清洗 + 去空白 + 限条数，返回 `ArrayList`（2026-06-06 修复：原 `List.of()`/`Stream.toList()` 不可变列表导致 Hibernate @ElementCollection 持久化时抛 `UnsupportedOperationException`）
 - 前端 `escapeHtml()`：`&<>"` 转义，所有动态内容渲染前先转义
 - Spring Data JPA 参数绑定，无手写 SQL
 
@@ -427,20 +452,22 @@ Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
 - `NoteRepository` 新增 `findByUserIdAndFolderPath`、`findByUserIdAndFolderPathPrefix`、`findDistinctFolderPathsByUserId`
 - `RagService` 新增 `extractDocxText()` 支持 DOCX 文件，`extractText()` 统一提取入口，`ingestText()` 接受预提取文本
 - 悬浮球使用 `assets/xiaolan-bot-head.png` 作为 bot 头像，加载失败不影响功能
+- AppController 已拆分为 6 个独立 Controller（2026-06-06）：`AiController`、`AuthController`、`NoteController`、`RagController`、`ReminderController`、`ReportController`，公共逻辑抽取到 `ControllerUtils`
+- `InputSanitizer.cleanList()` 返回 `ArrayList` 而非不可变列表（2026-06-06 修复），避免 Hibernate @ElementCollection 持久化异常
+- 笔记编辑器文件夹路径改为下拉选择已有路径 + 自定义输入（2026-06-06）
 
 ## 当前验证记录
 
-最近一次验证（2026-06-04）：
+最近一次验证（2026-06-06）：
 
 - `mvn test`：9 个集成测试全部通过
+- `mvn compile`：通过
 - `node --check src/main/resources/static/app.js`：通过
-- DDL 全面优化全链路验证通过：
-  - 手动创建、编辑、删除（二次确认 + 撤销 Toast）、完成/撤销完成
-  - AI 单条/批量解析（预览→确认→批量保存）
-  - 已完成分页、筛选条（全部/高优/本周/过期）
-  - 导航角标实时更新、过期警告条
-  - completedAt 自动记录、delete API 返回 204
-  - LaTeX `\(\)`/`\[\]` 分隔符渲染
+- AppController 拆分为 6 个独立 Controller（Ai / Auth / Note / Rag / Reminder / Report）+ ControllerUtils
+- 修复 InputSanitizer.cleanList 返回不可变列表导致 note 更新 UnsupportedOperationException
+- 修复 NoteController.updateNote 中 reindexNote 缺少 try-catch
+- 笔记编辑文件夹路径下拉选择已有路径（自动从文件夹树加载，支持自定义新路径）
+- DDL 全面优化全链路验证通过
 - Note folderPath 增强：模型字段 + 数据库索引 + DTO 输出 + 前缀查询
 - DOCX 文档解析：ZipInputStream + XML DOM 提取 word/document.xml
 - 悬浮球 bot 头像图片 (`assets/xiaolan-bot-head.png`)

@@ -1337,13 +1337,61 @@ async function deleteKnowledgeDocument(id, btn) {
 
 // ── Note Editor ───────────────────────────────────────
 
+function flattenFolderTree(nodes, prefix) {
+  prefix = prefix || "";
+  let paths = [];
+  for (const node of (nodes || [])) {
+    const path = prefix ? prefix + "/" + node.name : node.name;
+    paths.push(path);
+    if (node.children && node.children.length > 0) {
+      paths = paths.concat(flattenFolderTree(node.children, path));
+    }
+  }
+  return paths;
+}
+
+async function populateEditNoteFolder(selectedPath) {
+  const select = $("#editNoteFolderSelect");
+  const customInput = $("#editNoteFolderCustom");
+  try {
+    const folders = await api("/api/v1/notes/folders");
+    const paths = flattenFolderTree(folders);
+    select.innerHTML = '<option value="">📂 （根目录）</option>';
+    paths.forEach(function (p) {
+      select.innerHTML += '<option value="' + escapeHtml(p) + '">📁 ' + escapeHtml(p) + '</option>';
+    });
+    select.innerHTML += '<option value="__custom__">✏️ 自定义路径...</option>';
+
+    if (selectedPath) {
+      if (paths.includes(selectedPath)) {
+        select.value = selectedPath;
+        customInput.style.display = "none";
+      } else {
+        select.value = "__custom__";
+        customInput.style.display = "";
+        customInput.value = selectedPath;
+      }
+    } else {
+      select.value = "";
+      customInput.style.display = "none";
+    }
+  } catch (err) {
+    select.innerHTML = '<option value="">📂 （根目录）</option><option value="__custom__">✏️ 自定义路径...</option>';
+    if (selectedPath) {
+      select.value = "__custom__";
+      customInput.style.display = "";
+      customInput.value = selectedPath;
+    }
+  }
+}
+
 async function openNoteEditor(noteId) {
   try {
     const note = await api(`/api/v1/notes/${noteId}`);
     state.editingNoteId = noteId;
     $("#editNoteTitle").value = note.title || "";
     $("#editNoteCourse").value = note.course || "";
-    $("#editNoteFolder").value = note.folderPath || "";
+    await populateEditNoteFolder(note.folderPath || "");
     $("#editNoteContent").value = note.rawText || note.summary || "";
     // Set tags
     $$("#editNoteTags .tag-chip").forEach(c => c.remove());
@@ -1361,7 +1409,10 @@ async function saveNoteEdit() {
   if (!state.editingNoteId) return;
   const title = $("#editNoteTitle").value.trim();
   const course = $("#editNoteCourse").value.trim();
-  const folderPath = $("#editNoteFolder").value.trim();
+  const folderSelect = $("#editNoteFolderSelect");
+  const folderCustom = $("#editNoteFolderCustom");
+  let folderPath = folderSelect.value === "__custom__" ? folderCustom.value.trim() : folderSelect.value;
+  folderPath = folderPath || "";
   const content = $("#editNoteContent").value.trim();
   const tags = [];
   $$("#editNoteTags .tag-chip").forEach(chip => tags.push(chip.dataset.tag));
@@ -2182,6 +2233,9 @@ function bindEvents() {
   $("#saveEditNote").addEventListener("click", saveNoteEdit);
   $("#editorDeleteNote").addEventListener("click", deleteNoteFromEditor);
   $("#editorAiStructure").addEventListener("click", aiStructureNote);
+  $("#editNoteFolderSelect").addEventListener("change", function () {
+    $("#editNoteFolderCustom").style.display = this.value === "__custom__" ? "" : "none";
+  });
 
   // DDL
   $("#parseDdl").addEventListener("click", parseDdl);

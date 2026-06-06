@@ -82,7 +82,7 @@ java -jar target/campus-ai-1.0.0.jar
 
 ### 课堂笔记
 - 三种创建方式：手写笔记、拍照 AI 识别、上传文档提取
-- 笔记归档、搜索、编辑、删除（二次确认），文件夹树支持多级目录（folderPath 字段 + 前缀查询）
+- 笔记归档、搜索、编辑、删除（二次确认），文件夹树支持多级目录，编辑时下拉选择已有路径（folderPath 字段 + 前缀查询）
 - 笔记内容「预览」/「原文」双模式切换，预览区 Markdown 格式化渲染
 - AI 结构化处理：提取标题、摘要、知识点、公式、标签和思维导图
 - 图片上传点击放大灯箱预览，拍照识别后编辑保存（自动去重）
@@ -263,7 +263,7 @@ lanxin-campus-ai/
 │   │   │   ├── model/          # JPA 实体
 │   │   │   ├── repository/     # Spring Data JPA 仓储
 │   │   │   ├── service/        # Auth/JWT/AI/RAG 业务服务
-│   │   │   └── web/            # Controller、DTO、异常处理、限流、输入清洗
+│   │   │   └── web/            # 6 Controller + DTO + 异常 + 限流 + 清洗（原 AppController 拆分）
 │   │   └── resources/
 │   │       ├── application.yml
 │   │       └── static/         # index.html、styles.css、app.js

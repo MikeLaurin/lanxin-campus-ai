@@ -1,7 +1,9 @@
 package com.vivo.lanxin.campus.web;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 public final class InputSanitizer {
     private static final Pattern CONTROL_CHARS = Pattern.compile("[\\p{Cntrl}&&[^\r\n\t]]");
@@ -32,12 +34,12 @@ public final class InputSanitizer {
 
     public static List<String> cleanList(List<String> values, int itemMaxLength, int maxItems) {
         if (values == null) {
-            return List.of();
+            return new ArrayList<>();
         }
         return values.stream()
                 .limit(maxItems)
                 .map(item -> clean(item, itemMaxLength))
                 .filter(item -> !item.isBlank())
-                .toList();
+                .collect(Collectors.toCollection(ArrayList::new));
     }
 }
