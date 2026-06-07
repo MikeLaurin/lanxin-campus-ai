@@ -4,11 +4,19 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>蓝心校园 AI 管家</title>
-  <link rel="stylesheet" href="/styles.css?v=17">
+  <link rel="stylesheet" href="/styles.css?v=18">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
 </head>
 <body>
+  <!-- Recording bar -->
+  <div class="recording-bar" id="recordingBar" aria-live="polite">
+    <span class="rec-dot"></span>
+    <span>正在录音...</span>
+    <span class="rec-timer" id="recTimer">0:00</span>
+    <button id="stopRecordingBar" style="background:rgba(255,255,255,0.25);border:none;color:white;padding:3px 14px;border-radius:99px;font-size:12px;font-weight:700;cursor:pointer;">停止</button>
+  </div>
+
   <!-- Floating orbs -->
   <div class="orb orb-1" aria-hidden="true"></div>
   <div class="orb orb-2" aria-hidden="true"></div>
@@ -134,14 +142,13 @@
               <button class="text-button" id="openManualDdl" style="font-size:12px;color:var(--primary);">+ 手动添加</button>
             </div>
           </div>
-          <textarea id="ddlInput" rows="3" placeholder="输入你的待办事项，AI 自动分析。支持批量：&#10;1. 明天体测&#10;2. 下周一交高数作业&#10;3. 周五前完成实验报告"></textarea>
+          <textarea id="ddlInput" rows="3" placeholder="输入你的待办事项，AI 自动分析。支持批量输入，每行一条"></textarea>
+          <div class="voice-input-row">
+            <button class="voice-btn" id="voiceDdlBtn" aria-label="语音输入DDL" title="语音输入">🎤</button>
+            <span style="font-size:11px;color:var(--muted);">点击录音，说话自动填入待办事项</span>
+          </div>
           <div class="ddl-input-footer">
-            <span class="ddl-char-count" id="ddlCharCount">0 / 2000</span>
-            <div class="ddl-quick-examples">
-              <button class="ddl-example-btn" data-example="明天要体测">🏃 体测</button>
-              <button class="ddl-example-btn" data-example="下周一交高数作业">📐 交作业</button>
-              <button class="ddl-example-btn" data-example="周五前完成实验报告并提交">🔬 实验报告</button>
-            </div>
+            <span class="ddl-char-count" id="ddlCharCount">0 / 200</span>
           </div>
           <div class="button-row">
             <button class="primary-action" id="parseDdl">
@@ -303,7 +310,15 @@
             <input type="checkbox" id="ragToggle" checked style="accent-color:var(--primary);width:15px;height:15px;">
             <label for="ragToggle">基于知识库回答</label>
           </div>
+          <div class="tts-row">
+            <label>
+              <input type="checkbox" id="ttsToggle" style="accent-color:var(--primary);width:14px;height:14px;">
+              自动朗读回复
+            </label>
+            <span style="font-size:10px;color:var(--muted);">实验性功能</span>
+          </div>
           <div class="chat-input">
+            <button class="voice-btn" id="voiceChatBtn" aria-label="语音输入" title="语音输入">🎤</button>
             <input id="chatInput" placeholder="问问小蓝...">
             <button class="icon-button filled" id="sendChat" aria-label="发送">
               <span class="send-icon"></span>
@@ -385,6 +400,11 @@
             <label>内容</label>
             <textarea id="newNoteContent" placeholder="在这里写下你的笔记..."></textarea>
           </div>
+          <div class="voice-input-row">
+            <button class="voice-btn" id="voiceNoteBtn" aria-label="语音输入笔记" title="语音输入">🎤</button>
+            <span style="font-size:11px;color:var(--muted);">语音转文字输入笔记</span>
+          </div>
+          <div class="voice-transcript-preview" id="noteVoicePreview" style="display:none;"></div>
         </div>
 
         <!-- Camera mode -->
@@ -571,6 +591,6 @@
     <img id="imageLightboxImg" alt="Preview">
   </div>
 
-  <script src="/app.js?v=29"></script>
+  <script src="/app.js?v=34"></script>
 </body>
 </html>

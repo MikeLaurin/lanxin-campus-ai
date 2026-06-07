@@ -15,7 +15,10 @@ const state = {
   cameraNoteId: null,
   makeupContent: null,
   makeupNoteIds: [],
-  makeupDocumentIds: []
+  makeupDocumentIds: [],
+  voiceInputEnabled: true,
+  currentAudio: null,
+  currentAudioUrl: null
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -485,6 +488,337 @@ function updateTooltip() {
   }
 }
 
+// ── AudioManager ─────────────────────────────────────
+const AudioManager = {
+  isRecording: false,
+  _mode: null,            // 'speech' | 'media'
+  _speechRecognition: null,
+  _mediaRecorder: null,
+  _audioChunks: [],
+  _stream: null,
+  _recordingStartTime: 0,
+  _timerInterval: null,
+  _currentCallback: null,
+  _processing: false,
+
+  // ── Recording ─────────────────────────────────────
+
+  async startRecording(onResult) {
+    if (this.isRecording || this._processing) return;
+    this._currentCallback = onResult;
+
+    // Prefer browser SpeechRecognition — fast, no backend STT dependency.
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      this._startSpeechRecognition();
+    } else {
+      // Firefox etc.: fall back to MediaRecorder → server upload
+      try {
+        await this._startMediaRecording();
+      } catch (err) {
+        console.warn('MediaRecorder unavailable:', err.message);
+        showToast('您的浏览器不支持语音输入，请使用 Chrome 或 Edge');
+      }
+    }
+  },
+
+  // ── Primary: browser SpeechRecognition ────────────
+
+  _startSpeechRecognition() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'zh-CN';
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+      this._speechRecognition = recognition;
+      this._mode = 'speech';
+
+      this.isRecording = true;
+      this._recordingStartTime = Date.now();
+      this._showRecordingUI();
+      this._startTimer();
+
+      recognition.onresult = (event) => {
+        const text = event.results[0][0].transcript;
+        this._cleanupSpeech();
+        if (text && this._currentCallback) {
+          this._currentCallback(text);
+        } else {
+          showToast('没有听清，请再说一遍');
+        }
+        this._currentCallback = null;
+      };
+
+      recognition.onerror = (event) => {
+        console.error('SpeechRecognition error:', event.error);
+        if (event.error === 'not-allowed') {
+          showToast('请允许麦克风权限后重试');
+        } else if (event.error === 'no-speech') {
+          showToast('没有检测到语音，请再说一遍');
+        } else if (event.error !== 'aborted') {
+          showToast('语音识别出错: ' + event.error);
+        }
+        this._cleanupSpeech();
+        this._currentCallback = null;
+      };
+
+      recognition.onend = () => {
+        // If onresult didn't fire (e.g. user stopped manually), clean up
+        if (this._mode === 'speech') {
+          this._cleanupSpeech();
+          this._currentCallback = null;
+        }
+      };
+
+      recognition.start();
+    } catch (err) {
+      console.error('SpeechRecognition init failed:', err);
+      this._cleanupSpeech();
+      showToast('语音输入不可用，请检查浏览器权限');
+    }
+  },
+
+  _cleanupSpeech() {
+    this._mode = null;
+    this.isRecording = false;
+    this._stopTimer();
+    this._hideRecordingUI();
+    this._speechRecognition = null;
+  },
+
+  // ── Fallback: MediaRecorder → server STT ──────────
+
+  async _startMediaRecording() {
+    this._stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+    let mimeType = 'audio/webm';
+    if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+      mimeType = 'audio/webm;codecs=opus';
+    } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+      mimeType = 'audio/mp4';
+    }
+
+    this._audioChunks = [];
+    this._mediaRecorder = new MediaRecorder(this._stream, { mimeType });
+    this._mode = 'media';
+
+    this._mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) this._audioChunks.push(e.data);
+    };
+
+    this._mediaRecorder.onstop = () => {
+      this._processRecording();
+    };
+
+    this._mediaRecorder.start(100);
+    this.isRecording = true;
+    this._recordingStartTime = Date.now();
+    this._showRecordingUI();
+    this._startTimer();
+  },
+
+  _cleanupMediaStream() {
+    if (this._stream) {
+      this._stream.getTracks().forEach(t => t.stop());
+      this._stream = null;
+    }
+  },
+
+  // ── Stop ──────────────────────────────────────────
+
+  stopRecording() {
+    if (!this.isRecording) return;
+
+    if (this._mode === 'speech' && this._speechRecognition) {
+      this._speechRecognition.stop();
+      // cleanupSpeech will be called in onend/onerror
+      return;
+    }
+
+    if (this._mode === 'media') {
+      this.isRecording = false;
+      this._processing = true;
+      this._stopTimer();
+      this._hideRecordingUI();
+
+      document.querySelectorAll('.voice-btn.recording').forEach(btn => {
+        btn.classList.remove('recording');
+        btn.classList.add('processing');
+      });
+
+      if (this._mediaRecorder && this._mediaRecorder.state !== 'inactive') {
+        this._mediaRecorder.stop();
+      }
+      this._cleanupMediaStream();
+    }
+  },
+
+  async _processRecording() {
+    const mime = this._mediaRecorder ? this._mediaRecorder.mimeType : 'audio/webm';
+    const ext = (mime && mime.includes('mp4')) ? 'mp4' : 'webm';
+    const blob = new Blob(this._audioChunks, { type: mime || 'audio/webm' });
+
+    try {
+      const text = await this._uploadAndTranscribe(blob, ext);
+      this._finishProcessing();
+      if (text && this._currentCallback) {
+        this._currentCallback(text);
+      } else {
+        showToast('没有听清，请再说一遍');
+      }
+    } catch (err) {
+      console.error('AudioManager: server STT failed', err);
+      this._finishProcessing();
+      showToast('语音识别失败，请检查网络后重试');
+    }
+    this._currentCallback = null;
+  },
+
+  async _uploadAndTranscribe(blob, ext) {
+    const formData = new FormData();
+    formData.append('file', blob, 'recording.' + ext);
+
+    const headers = {};
+    if (state.token) headers['Authorization'] = 'Bearer ' + state.token;
+
+    const response = await fetch('/api/v1/ai/speech-to-text', {
+      method: 'POST',
+      headers,
+      body: formData
+    });
+
+    if (response.status === 401) {
+      if (await refreshAccessToken()) return this._uploadAndTranscribe(blob, ext);
+      showAuth();
+      throw new Error('登录已过期');
+    }
+
+    if (!response.ok) {
+      const errBody = await response.json().catch(() => ({}));
+      throw new Error(errBody.error || errBody.message || '语音识别失败');
+    }
+
+    const data = await response.json();
+    return data.text || '';
+  },
+
+  _finishProcessing() {
+    this._mode = null;
+    this._processing = false;
+    this._audioChunks = [];
+    this._mediaRecorder = null;
+    document.querySelectorAll('.voice-btn.processing').forEach(btn => {
+      btn.classList.remove('processing');
+    });
+  },
+
+  // ── Timer / UI ────────────────────────────────────
+
+  _startTimer() {
+    const timer = document.getElementById('recTimer');
+    if (timer) timer.textContent = '0:00';
+    this._timerInterval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - this._recordingStartTime) / 1000);
+      const mins = Math.floor(elapsed / 60);
+      const secs = elapsed % 60;
+      if (timer) timer.textContent = mins + ':' + String(secs).padStart(2, '0');
+    }, 200);
+  },
+
+  _stopTimer() {
+    if (this._timerInterval) { clearInterval(this._timerInterval); this._timerInterval = null; }
+  },
+
+  _showRecordingUI() {
+    const bar = document.getElementById('recordingBar');
+    if (bar) bar.classList.add('show');
+    document.querySelectorAll('.voice-btn').forEach(b => b.classList.add('recording'));
+  },
+
+  _hideRecordingUI() {
+    const bar = document.getElementById('recordingBar');
+    if (bar) bar.classList.remove('show');
+    document.querySelectorAll('.voice-btn.recording').forEach(b => b.classList.remove('recording'));
+  },
+
+  // ── TTS (Text-to-Speech) ──────────────────────────
+
+  async playTts(text, buttonEl) {
+    if (this._currentAudioObj) { this.stopTts(); return; }
+    if (buttonEl) buttonEl.classList.add('loading');
+
+    try {
+      const audioUrl = await this._fetchTtsAudio(text);
+      if (audioUrl) {
+        const audio = new Audio(audioUrl);
+        this._currentAudioObj = audio;
+        audio.onended = () => { this._clearAudio(); if (buttonEl) buttonEl.classList.remove('playing'); };
+        audio.onerror = () => { this._clearAudio(); if (buttonEl) buttonEl.classList.remove('playing'); this._browserTtsFallback(text, buttonEl); };
+        if (buttonEl) { buttonEl.classList.remove('loading'); buttonEl.classList.add('playing'); }
+        await audio.play();
+      } else {
+        if (buttonEl) buttonEl.classList.remove('loading');
+        this._browserTtsFallback(text, buttonEl);
+      }
+    } catch (err) {
+      console.warn('Server TTS failed:', err.message);
+      if (buttonEl) buttonEl.classList.remove('loading');
+      this._browserTtsFallback(text, buttonEl);
+    }
+  },
+
+  async _fetchTtsAudio(text) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (state.token) headers['Authorization'] = 'Bearer ' + state.token;
+    const response = await fetch('/api/v1/ai/text-to-speech', {
+      method: 'POST', headers,
+      body: JSON.stringify({ text: text.substring(0, 2000), voice: 'alloy' })
+    });
+    if (response.status === 401) {
+      if (await refreshAccessToken()) return this._fetchTtsAudio(text);
+      showAuth(); return null;
+    }
+    if (!response.ok || response.status === 204) return null;
+    const blob = await response.blob();
+    if (blob.size === 0) return null;
+    return URL.createObjectURL(blob);
+  },
+
+  _browserTtsFallback(text, buttonEl) {
+    if (!('speechSynthesis' in window)) { showToast('浏览器不支持语音朗读'); return; }
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'zh-CN';
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    const voices = window.speechSynthesis.getVoices();
+    const zh = voices.find(v => v.lang.startsWith('zh-CN') || v.lang.startsWith('zh-TW') || v.lang.startsWith('zh'));
+    if (zh) utterance.voice = zh;
+    if (buttonEl) { buttonEl.classList.remove('loading'); buttonEl.classList.add('playing'); }
+    utterance.onend = () => { this._clearBrowserUtterance(); if (buttonEl) buttonEl.classList.remove('playing'); };
+    utterance.onerror = () => { this._clearBrowserUtterance(); if (buttonEl) buttonEl.classList.remove('playing'); };
+    this._browserUtterance = utterance;
+    window.speechSynthesis.speak(utterance);
+  },
+
+  stopTts() {
+    this._clearAudio();
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    this._clearBrowserUtterance();
+    state.currentAudio = null;
+    state.currentAudioUrl = null;
+  },
+
+  _clearAudio() {
+    if (this._currentAudioObj) { this._currentAudioObj.pause(); this._currentAudioObj.src = ''; this._currentAudioObj = null; }
+  },
+
+  _clearBrowserUtterance() {
+    this._browserUtterance = null;
+  }
+};
+
 // ── Chat Drawer ───────────────────────────────────────
 
 function openChatDrawer() {
@@ -570,6 +904,22 @@ async function sendRagChat() {
       $("#chatBox").scrollTop = $("#chatBox").scrollHeight;
     }
     msgDiv.innerHTML = renderMarkdown(fullText);
+    // Add TTS play button if TTS toggle is on
+    if ($("#ttsToggle") && $("#ttsToggle").checked) {
+      const playBtn = document.createElement('button');
+      playBtn.className = 'audio-play-btn';
+      playBtn.innerHTML = '<span>🔊</span> 朗读回复';
+      playBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (playBtn.classList.contains('playing')) {
+          AudioManager.stopTts();
+          playBtn.classList.remove('playing');
+        } else {
+          AudioManager.playTts(fullText, playBtn);
+        }
+      });
+      msgDiv.appendChild(playBtn);
+    }
     $("#chatBox").scrollTop = $("#chatBox").scrollHeight;
   } catch (err) {
     hideTyping();
@@ -2248,23 +2598,13 @@ function bindEvents() {
   $("#ddlInput").addEventListener("input", () => {
     const len = $("#ddlInput").value.length;
     const counter = $("#ddlCharCount");
-    if (counter) counter.textContent = `${len} / 2000`;
+    if (counter) counter.textContent = `${len} / 200`;
   });
   $("#clearDdlInput").addEventListener("click", () => {
     $("#ddlInput").value = "";
     $("#ddlInput").focus();
     const counter = $("#ddlCharCount");
-    if (counter) counter.textContent = "0 / 2000";
-  });
-
-  // DDL quick examples
-  $$(".ddl-example-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      $("#ddlInput").value = btn.dataset.example;
-      $("#ddlInput").focus();
-      const counter = $("#ddlCharCount");
-      if (counter) counter.textContent = `${btn.dataset.example.length} / 2000`;
-    });
+    if (counter) counter.textContent = "0 / 200";
   });
 
   // DDL tabs
@@ -2316,6 +2656,78 @@ function bindEvents() {
     if ((e.ctrlKey || e.metaKey) && e.key === "k") {
       e.preventDefault();
       openChatDrawer();
+    }
+  });
+
+  // ── Voice / Speech event bindings ─────────────────────
+
+  // Chat mic button — voice input for chat (auto-send after transcript)
+  const voiceChatBtn = $("#voiceChatBtn");
+  if (voiceChatBtn) {
+    voiceChatBtn.addEventListener("click", () => {
+      if (AudioManager.isRecording) {
+        AudioManager.stopRecording();
+      } else {
+        AudioManager.startRecording((text) => {
+          const chatInput = $("#chatInput");
+          if (chatInput) {
+            chatInput.value = text;
+            sendRagChat();
+          }
+        });
+      }
+    });
+  }
+
+  // DDL voice button — fill textarea directly
+  const voiceDdlBtn = $("#voiceDdlBtn");
+  if (voiceDdlBtn) {
+    voiceDdlBtn.addEventListener("click", () => {
+      if (AudioManager.isRecording) {
+        AudioManager.stopRecording();
+      } else {
+        AudioManager.startRecording((text) => {
+          const ddlInput = $("#ddlInput");
+          if (ddlInput) {
+            const existing = ddlInput.value.trim();
+            ddlInput.value = existing ? existing + '\n' + text : text;
+            ddlInput.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+        });
+      }
+    });
+  }
+
+  // Note voice button — fill textarea
+  const voiceNoteBtn = $("#voiceNoteBtn");
+  if (voiceNoteBtn) {
+    voiceNoteBtn.addEventListener("click", () => {
+      if (AudioManager.isRecording) {
+        AudioManager.stopRecording();
+      } else {
+        AudioManager.startRecording((text) => {
+          const noteContent = $("#newNoteContent");
+          if (noteContent) {
+            const existing = noteContent.value.trim();
+            noteContent.value = existing ? existing + '\n' + text : text;
+          }
+          const preview = $("#noteVoicePreview");
+          if (preview) { preview.textContent = '🎙️ ' + text; preview.style.display = 'block'; }
+        });
+      }
+    });
+  }
+
+  // Stop recording bar button
+  const stopBarBtn = $("#stopRecordingBar");
+  if (stopBarBtn) {
+    stopBarBtn.addEventListener("click", () => AudioManager.stopRecording());
+  }
+
+  // Global Escape to stop recording
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && AudioManager.isRecording) {
+      AudioManager.stopRecording();
     }
   });
 }

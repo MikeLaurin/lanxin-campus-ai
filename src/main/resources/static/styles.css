@@ -3169,3 +3169,260 @@ textarea::placeholder,
   .modal-card { width: 100vw; max-height: 100vh; border-radius: 0; }
   .note-editor { width: 100vw; max-height: 100vh; border-radius: 0; }
 }
+
+/* ═══════════════════════════════════════════════════════
+   VOICE / SPEECH UI
+   ═══════════════════════════════════════════════════════ */
+
+/* ── Recording bar (top of screen) ───────── */
+
+.recording-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2000;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: linear-gradient(90deg, #FF4757, #FF6B81);
+  color: white;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  transform: translateY(-100%);
+  opacity: 0;
+  transition: all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  box-shadow: 0 2px 16px rgba(255, 71, 87, 0.3);
+}
+
+.recording-bar.show {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+.recording-bar .rec-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: white;
+  animation: recPulse 0.8s ease-in-out infinite;
+}
+
+.recording-bar .rec-timer {
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+  text-align: center;
+}
+
+/* ── Voice button (microphone) ───────────── */
+
+.voice-btn {
+  width: 42px;
+  height: 42px;
+  border: 2px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--ink-secondary);
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: relative;
+}
+
+.voice-btn:hover {
+  border-color: var(--primary-light);
+  color: var(--primary);
+  background: var(--primary-bg);
+  transform: scale(1.08);
+}
+
+.voice-btn::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  transition: all 0.3s ease;
+  pointer-events: none;
+}
+
+.voice-btn.recording {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-bg);
+  animation: voiceBtnShake 0.5s ease-in-out infinite;
+}
+
+.voice-btn.recording::after {
+  border-color: rgba(255, 71, 87, 0.25);
+  animation: recRing 1.2s ease-out infinite;
+}
+
+.voice-btn.processing {
+  border-color: var(--warning);
+  color: var(--warning);
+  background: var(--warning-bg);
+  pointer-events: none;
+}
+
+.voice-btn.processing::after {
+  border-color: var(--warning);
+  border-top-color: transparent;
+  animation: spinRing 0.8s linear infinite;
+}
+
+/* ── Audio play button (in chat messages) ── */
+
+.audio-play-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1px solid var(--line-light);
+  border-radius: var(--radius-pill);
+  background: var(--primary-bg);
+  color: var(--primary-dark);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 6px;
+  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  user-select: none;
+}
+
+.audio-play-btn:hover {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+  transform: scale(1.05);
+}
+
+.audio-play-btn.playing {
+  background: var(--success-bg);
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.audio-play-btn.loading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.audio-play-btn .audio-wave-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 16px;
+}
+
+.audio-play-btn .audio-wave-bars span {
+  width: 3px;
+  background: currentColor;
+  border-radius: 2px;
+  animation: audioWave 0.7s ease-in-out infinite;
+}
+
+.audio-play-btn .audio-wave-bars span:nth-child(1) { height: 6px; animation-delay: 0s; }
+.audio-play-btn .audio-wave-bars span:nth-child(2) { height: 13px; animation-delay: 0.15s; }
+.audio-play-btn .audio-wave-bars span:nth-child(3) { height: 10px; animation-delay: 0.3s; }
+.audio-play-btn .audio-wave-bars span:nth-child(4) { height: 16px; animation-delay: 0.45s; }
+
+.audio-play-btn.playing .audio-wave-bars span {
+  animation-play-state: running;
+}
+
+.audio-play-btn:not(.playing) .audio-wave-bars span {
+  animation-play-state: paused;
+}
+
+/* ── TTS toggle in chat footer ───────────── */
+
+.tts-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tts-row label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.tts-row input[type="checkbox"] {
+  accent-color: var(--primary);
+  width: 14px;
+  height: 14px;
+}
+
+/* ── Voice input area (notes / DDL) ──────── */
+
+.voice-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.voice-input-row .voice-btn {
+  width: 36px;
+  height: 36px;
+  font-size: 16px;
+}
+
+.voice-transcript-preview {
+  font-size: 12px;
+  color: var(--primary-dark);
+  background: var(--primary-bg);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  margin-top: 6px;
+  line-height: 1.5;
+  border-left: 3px solid var(--primary);
+  animation: fadeSlideIn 0.3s ease;
+}
+
+/* ── Keyframes ───────────────────────────── */
+
+@keyframes recPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.3; transform: scale(0.7); }
+}
+
+@keyframes recRing {
+  0% { transform: scale(1); opacity: 0.6; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+
+@keyframes voiceBtnShake {
+  0%, 100% { transform: scale(1); }
+  25% { transform: scale(1.06); }
+  75% { transform: scale(0.96); }
+}
+
+@keyframes spinRing {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes audioWave {
+  0%, 100% { transform: scaleY(1); }
+  50% { transform: scaleY(0.35); }
+}
+
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}

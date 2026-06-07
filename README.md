@@ -89,7 +89,8 @@ java -jar target/campus-ai-1.0.0.jar
 - 笔记创建/更新后自动写入 RAG 知识库并生成 embedding 向量
 
 ### DDL 管理
-- 三种创建方式：AI 智能解析（支持批量）、手动创建（弹窗表单）、快捷示例模板
+- 两种创建方式：AI 智能解析（支持批量）、手动创建（弹窗表单），面板简洁无冗余
+- 输入框字数限制 200 字符，支持语音输入直接录入
 - AI 解析预览：解析结果确认弹窗，支持移除/修改后再批量保存，解析前不会直接入库
 - AI 智能分类：自动识别事项类别（考试/作业/体测/活动/论文/体育等），不再错误归类为"专业课程"
 - 智能日期识别：支持"明天/后天/下周一/周末/月底/3天后"等 20+ 种日期表达
@@ -124,14 +125,22 @@ java -jar target/campus-ai-1.0.0.jar
 - 生成后支持追问聊天：对补课包内容流式提问 AI
 - 保存为笔记：自定义弹窗填写标题、文件夹路径、标签，预览 Markdown 原文后保存
 
+### 语音功能（STT / TTS）
+- 三个语音入口：聊天输入框、DDL 输入框、笔记输入框
+- 语音转文字（STT）：浏览器 SpeechRecognition API（zh-CN）实时识别，MediaRecorder + 服务端降级
+- 文字转语音（TTS）：服务端 TTS 优先（OpenAI 兼容 /audio/speech），浏览器 SpeechSynthesis 降级
+- 录音 UI：录音指示条 + 计时器 + 脉冲/环形动画
+- TTS 播放：消息气泡内播放按钮 + 音频波形动画
+
 ### 学习周报
 - 汇总笔记数量、专注时长、完成 DDL 数、学习亮点和 AI 建议
 
 ### 前端交互体验
 - "温暖学伴"设计风格：浮动光斑背景、流动渐变 Hero、毛玻璃面板、emoji 图标
-- 18+ CSS 动画：弹簧过渡、波纹反馈、呼吸发光、弹跳导航、打字指示器、消息滑入
+- 18+ CSS 动画：弹簧过渡、波纹反馈、呼吸发光、弹跳导航、打字指示器、消息滑入、录音脉冲、音频波形
 - JS 微交互：按钮水波纹（ripple）、统计数字滚动计数、AI 回复等待动画
 - Toast 消息提示组件，全局统一反馈
+- 语音录制播放：AudioManager 模块，录音指示条实时反馈，TTS 播放控制
 - 防重复点击：所有异步操作按钮 loading 禁用态
 - Markdown 渲染：支持 #标题、**加粗**、- 列表、数学公式（KaTeX 渲染，支持 `$$`/`$`/`\[`/`\(` 四种 LaTeX 分隔符）
 - 悬浮球拖拽定位 + 吸附边缘 + 点击打开聊天抽屉（使用小蓝头像图片）
@@ -231,6 +240,10 @@ Authorization: Bearer <accessToken>
 - `POST /api/v1/ai/makeup/generate`
 - `POST /api/v1/ai/makeup/stream`
 - `POST /api/v1/ai/makeup/chat/stream`
+- `POST /api/v1/ai/speech-to-text`
+- `POST /api/v1/ai/text-to-speech`
+- `POST /api/v1/ai/voice-chat`
+- `POST /api/v1/ai/voice-chat/stream`
 - `GET /api/v1/ai/provider/status`
 - `POST /api/v1/rag/documents`
 - `GET /api/v1/rag/documents`

@@ -611,6 +611,32 @@ public class AiMockService {
         });
     }
 
+    // ── Voice / Speech ─────────────────────────────────────────
+
+    /**
+     * Transcribe audio bytes to text via LanxinApiClient.
+     * Returns empty string if the API is not configured or the call fails
+     * (the frontend should fall back to browser-side Web Speech API).
+     */
+    public String transcribeAudio(byte[] audioBytes, String mimeType) {
+        if (audioBytes == null || audioBytes.length == 0) {
+            return "";
+        }
+        return lanxin.speechToText(audioBytes, mimeType).orElse("");
+    }
+
+    /**
+     * Synthesize speech audio from text via LanxinApiClient.
+     * Returns the raw MP3 bytes, or null if the API is unavailable
+     * (the frontend should fall back to browser SpeechSynthesis).
+     */
+    public byte[] synthesizeSpeech(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        return lanxin.textToSpeech(text, "alloy").orElse(null);
+    }
+
     private String text(Map<String, Object> payload, String key, String fallback) {
         Object value = payload.get(key);
         if (value == null || String.valueOf(value).isBlank()) {

@@ -112,6 +112,7 @@ src/main/java/com/vivo/lanxin/campus/web/MakeupChatRequest.java
 src/main/java/com/vivo/lanxin/campus/web/TextRequest.java
 src/main/java/com/vivo/lanxin/campus/web/IngestTextRequest.java
 src/main/java/com/vivo/lanxin/campus/web/SourceSelectionRequest.java
+src/main/java/com/vivo/lanxin/campus/web/VoiceChatRequest.java
 ```
 
 业务服务：
@@ -184,7 +185,7 @@ src/test/resources/application.yml
   - AI 降级逻辑：30+ 课程/类别关键词匹配、20+ 日期表达识别、智能优先级推断
   - 不再强行归类为"专业课程"：体测→体育、开会→活动、论文→论文
 - 手动创建：弹窗表单（标题、类别、日期、优先级、备注），调 POST `/reminders`
-- 快捷示例：🏃 体测 / 📐 交作业 / 🔬 实验报告 三个一键填入按钮
+- 手动创建仅保留弹窗表单和 AI 解析两种方式（快捷示例按钮已移除，简化 DDL 面板）
 
 管理与交互：
 - 未完成/已完成双 Tab，筛选条（全部/高优先级/本周/已过期）
@@ -193,6 +194,8 @@ src/test/resources/application.yml
 - 删除二次确认 + 撤销 Toast（5 秒内可撤销 `showUndoToast()`）
 - 已完成列表分页（`GET /reminders?includeCompleted=true&page=0&size=20`），加载更多按钮
 - DDL 卡片可点击展开/收起完整描述
+	- 输入框字数限制 200 字符（原 2000），实时字数统计
+	- 语音输入：支持浏览器语音识别直接录入 DDL 事项
 
 日期与统计：
 - 今日待办 `GET /reminders/today`：dueDate BETWEEN today AND today+7，不含过期项
@@ -269,7 +272,7 @@ src/test/resources/application.yml
   - 悬浮球：`pointerdown/pointermove/pointerup` 拖拽 + 松手吸附左右边缘 + 位置 localStorage 持久化 + bot 头像图片 (`assets/xiaolan-bot-head.png`)
   - DDL 解析预览 `renderParsePreview()`：AI 批量解析结果确认卡片
   - 字数统计 `$("#ddlCharCount")`：DDL 输入框实时字数显示
-  - 快捷示例：DDL 输入框三个一键填入按钮
+  - 语音输入：AudioManager 模块，浏览器 SpeechRecognition API 语音转文字，支持聊天/DDL/笔记三个入口
   - DDL 筛选 `switchDdlFilter()`：全部/高优先级/本周/已过期
   - DDL 卡片展开：点击卡片展开/收起完整描述
 - 内容预览切换：`switchContentPreview()` 在「预览」（`renderMarkdown()` 渲染）和「原文」（textarea 编辑）间切换
@@ -278,9 +281,32 @@ src/test/resources/application.yml
 - 图片灯箱：点击预览图放大，Escape 关闭
 - 版本缓存：`styles.css?v=N` 和 `app.js?v=N` 控制前端缓存刷新
 
+### 语音功能（Speech-to-Text / Text-to-Speech）
+
+语音入口覆盖聊天输入框、DDL 输入框、笔记输入框三个场景。
+
+- 语音转文字（STT）：优先使用浏览器 SpeechRecognition API（Web Speech API，zh-CN），实时将语音转为文本
+- 降级方案：MediaRecorder API 录音为 WebM → 上传 `/api/v1/ai/speech-to-text` → 调用 LanxinApiClient.speechToText()（OpenAI 兼容 /audio/transcriptions）
+- 文字转语音（TTS）：优先调用服务端 `/api/v1/ai/text-to-speech` → LanxinApiClient.textToSpeech()（OpenAI 兼容 /audio/speech），浏览器 SpeechSynthesis API 降级
+- 语音对话：`/api/v1/ai/voice-chat` 和 `/api/v1/ai/voice-chat/stream` 端点，组合 STT → AI Chat → TTS 全链路
+
+后端新增：
+- `VoiceChatRequest` DTO（@NotBlank text + @Size(max=50) voice）
+- `LanxinApiClient.speechToText(byte[] audioBytes, String mimeType)` — 调用 /audio/transcriptions，multipart/form-data 上传
+- `LanxinApiClient.textToSpeech(String text, String voice)` — 调用 /audio/speech，返回 byte[] MP3
+- `AiMockService.transcribeAudio()` / `synthesizeSpeech()` — 委托 LanxinApiClient 的 STT/TTS
+- `AiController` 4 个语音端点
+
+前端新增：
+- `AudioManager` 模块（~280 行）：startRecording / stopRecording / playTts / stopTts
+- 录音 UI：`.recording-bar` 录音指示条 + 计时器 + 脉冲动画
+- TTS UI：消息气泡内 `.tts-row` 播放按钮 + 音频波形动画
+- 250+ 行 CSS 语音样式：`.voice-btn`、`.audio-play-btn`、`.voice-input-row`、关键帧动画
+
+
 ### AI 调用与错误处理
 
-- `LanxinApiClient` 四个核心方法：`chat()`、`chatWithImage()`、`embedding()`、`streamChat()`
+- `LanxinApiClient` 六个核心方法：`chat()`、`chatWithImage()`、`embedding()`、`streamChat()`、`speechToText()`、`textToSpeech()`
 - 统一抛出 `AiServiceException extends ApiException`，携带 `provider`、`aiStatus`、HTTP 状态码
 - `GlobalExceptionHandler` 分层处理：AiServiceException → ApiException → IllegalArgumentException → MethodArgumentNotValidException → ConstraintViolationException → MissingRequestHeaderException → Exception
 - 流式端点 lambda 内异常无法被 `@RestControllerAdvice` 捕获，已在 `makeupChatStream()` 和 `chatWithRagStream()` 中加 try-catch 兜底
@@ -452,11 +478,27 @@ Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
 - `NoteRepository` 新增 `findByUserIdAndFolderPath`、`findByUserIdAndFolderPathPrefix`、`findDistinctFolderPathsByUserId`
 - `RagService` 新增 `extractDocxText()` 支持 DOCX 文件，`extractText()` 统一提取入口，`ingestText()` 接受预提取文本
 - 悬浮球使用 `assets/xiaolan-bot-head.png` 作为 bot 头像，加载失败不影响功能
+- `AudioManager` 模块实现语音录制和播放：SpeechRecognition API 为主（zh-CN），MediaRecorder + 服务端 STT 降级；TTS 服务端优先，浏览器 SpeechSynthesis 降级（2026-06-07）
+- DDL 面板简化：移除三个快捷示例按钮，字符限制从 2000 改为 200，语音输入直接填入 textarea（2026-06-07）
+- `VoiceChatRequest` DTO 用于 text-to-speech 和 voice-chat 端点（2026-06-07）
+
 - AppController 已拆分为 6 个独立 Controller（2026-06-06）：`AiController`、`AuthController`、`NoteController`、`RagController`、`ReminderController`、`ReportController`，公共逻辑抽取到 `ControllerUtils`
 - `InputSanitizer.cleanList()` 返回 `ArrayList` 而非不可变列表（2026-06-06 修复），避免 Hibernate @ElementCollection 持久化异常
 - 笔记编辑器文件夹路径改为下拉选择已有路径 + 自定义输入（2026-06-06）
 
 ## 当前验证记录
+
+最近一次验证（2026-06-07）：
+
+- `mvn test`：通过
+- `mvn compile`：通过
+- `node --check src/main/resources/static/app.js`：通过
+- AudioManager 语音模块完整实现：STT 浏览器 SpeechRecognition 为主 + MediaRecorder 降级，TTS 服务端优先 + SpeechSynthesis 降级
+- DDL 面板简化：移除快捷示例按钮，字符限制 200，语音输入直连 textarea
+- `VoiceChatRequest` DTO 新增，后端 4 个语音端点，`LanxinApiClient.speechToText()` / `textToSpeech()`
+- 录音 UI 指示条 + 计时器 + CSS 动画、TTS 播放按钮 + 波形动画全链路通过
+- 语音输入三入口（聊天/DDL/笔记）全部可用
+
 
 最近一次验证（2026-06-06）：
 

@@ -160,6 +160,102 @@ public class AiController {
         );
     }
 
+    // ── Voice / Speech endpoints ───────────────────────────────
+
+    @PostMapping("/speech-to-text")
+    public Map<String, Object> speechToText(@RequestHeader("Authorization") String authHeader,
+                                            @RequestParam("file") MultipartFile file) throws java.io.IOException {
+        if (file.isEmpty()) {
+            throw new IllegalArgumentException("音频文件为空");
+        }
+        long maxSize = 10 * 1024 * 1024; // 10 MB
+        if (file.getSize() > maxSize) {
+            throw new IllegalArgumentException("音频文件过大（最大10MB）");
+        }
+        String contentType = file.getContentType();
+        if (contentType == null) contentType = "audio/webm";
+        if (!contentType.startsWith("audio/") && !contentType.equals("video/webm")) {
+            throw new IllegalArgumentException("不支持的文件类型：" + contentType + "，请上传音频文件");
+        }
+        byte[] audioBytes = file.getBytes();
+        String text = ai.transcribeAudio(audioBytes, contentType);
+        long durationSec = file.getSize() / 8000; // rough estimate: ~8 KB/s for compressed audio
+        return Map.of("text", (Object) text, "duration", (Object) durationSec);
+    }
+
+    @PostMapping("/text-to-speech")
+    public org.springframework.http.ResponseEntity<byte[]> textToSpeech(
+            @RequestHeader("Authorization") String authHeader,
+            @Valid @RequestBody VoiceChatRequest request) {
+        String text = InputSanitizer.clean(request.text(), 2000);
+        if (text.isBlank()) {
+            throw new IllegalArgumentException("文字内容为空");
+        }
+        byte[] audioBytes = ai.synthesizeSpeech(text);
+        if (audioBytes == null || audioBytes.length == 0) {
+            return org.springframework.http.ResponseEntity.noContent().build();
+        }
+        return org.springframework.http.ResponseEntity.ok()
+                .header(org.springframework.http.HttpHeaders.CONTENT_TYPE, "audio/mpeg")
+                .header(org.springframework.http.HttpHeaders.CONTENT_LENGTH, String.valueOf(audioBytes.length))
+                .body(audioBytes);
+    }
+
+    @PostMapping("/voice-chat")
+    public Map<String, Object> voiceChat(@RequestHeader("Authorization") String authHeader,
+                                         @RequestParam("file") MultipartFile file,
+                                         @RequestParam(value = "voiceResponse", defaultValue = "true") boolean voiceResponse)
+            throws java.io.IOException {
+        Long userId = getUserIdOrNull(authHeader);
+        // Step 1: STT
+        if (file.isEmpty()) {
+            throw new IllegalArgumentException("音频文件为空");
+        }
+        String mimeType = file.getContentType() != null ? file.getContentType() : "audio/webm";
+        String userText = ai.transcribeAudio(file.getBytes(), mimeType);
+        if (userText.isBlank()) {
+            return Map.of("userText", "", "aiText", "抱歉，没有听清，请再说一遍。", "audioBase64", "");
+        }
+        // Step 2: Chat
+        Map<String, Object> chatResult = ai.chat(userId, Map.of("message", userText));
+        String aiText = (String) chatResult.getOrDefault("answer", "抱歉，AI 服务暂时不可用。");
+        // Step 3: TTS (optional)
+        String audioBase64 = "";
+        if (voiceResponse) {
+            byte[] ttsAudio = ai.synthesizeSpeech(aiText);
+            if (ttsAudio != null && ttsAudio.length > 0) {
+                audioBase64 = java.util.Base64.getEncoder().encodeToString(ttsAudio);
+            }
+        }
+        return Map.of("userText", (Object) userText,
+                      "aiText", (Object) aiText,
+                      "audioBase64", (Object) audioBase64);
+    }
+
+    @PostMapping(value = "/voice-chat/stream", produces = "text/plain;charset=UTF-8")
+    public org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody voiceChatStream(
+            @RequestHeader("Authorization") String authHeader,
+            @RequestParam("file") MultipartFile file) throws java.io.IOException {
+        Long userId = getUserIdOrNull(authHeader);
+        // Step 1: STT first
+        if (file.isEmpty()) {
+            throw new IllegalArgumentException("音频文件为空");
+        }
+        String mimeType = file.getContentType() != null ? file.getContentType() : "audio/webm";
+        String userText = ai.transcribeAudio(file.getBytes(), mimeType);
+        if (userText.isBlank()) {
+            String fallback = "抱歉，没有听清你说的话，可以再说一遍吗？";
+            return outputStream -> {
+                try {
+                    outputStream.write(("data: " + fallback + "\n\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    outputStream.flush();
+                } catch (java.io.IOException ignored) {}
+            };
+        }
+        // Step 2: Stream chat response (like chatStream)
+        return ai.chatStream(userId, userText);
+    }
+
     private Long getUserIdOrNull(String authHeader) {
         try {
             return auth.getUserId(authHeader);

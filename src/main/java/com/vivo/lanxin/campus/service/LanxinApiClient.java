@@ -234,6 +234,147 @@ public class LanxinApiClient {
         return normalized + "/chat/completions?requestId=" + UUID.randomUUID();
     }
 
+    // ── Speech-to-Text ──────────────────────────────────────────
+
+    /**
+     * Transcribe audio to text via OpenAI-compatible /audio/transcriptions endpoint.
+     *
+     * @param audioBytes raw audio data (WebM, MP3, WAV, etc.)
+     * @param mimeType   MIME type of the audio (e.g. "audio/webm")
+     * @return transcribed text if the API is configured and the call succeeds
+     */
+    public Optional<String> speechToText(byte[] audioBytes, String mimeType) {
+        if (!configured()) {
+            return Optional.empty();
+        }
+
+        try {
+            // Build multipart/form-data manually via Java HttpClient
+            String boundary = "----LanxinAudioBoundary" + UUID.randomUUID().toString().replace("-", "");
+            java.io.ByteArrayOutputStream bodyStream = new java.io.ByteArrayOutputStream();
+
+            // -- file part
+            writePart(bodyStream, boundary, "file", "recording." + extensionForMime(mimeType), mimeType, audioBytes);
+            // -- model part
+            writePart(bodyStream, boundary, "model", model);
+            // -- language hint
+            writePart(bodyStream, boundary, "language", "zh");
+            // -- closing boundary
+            bodyStream.write(("--" + boundary + "--\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+            java.net.http.HttpRequest httpRequest = java.net.http.HttpRequest.newBuilder()
+                    .uri(URI.create(audioTranscriptionsUrl()))
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
+                    .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                    .timeout(java.time.Duration.ofSeconds(120))
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofByteArray(bodyStream.toByteArray()))
+                    .build();
+
+            java.net.http.HttpResponse<String> response = httpClient.send(httpRequest,
+                    java.net.http.HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 400) {
+                System.err.println("[LanxinApiClient] STT call failed: " + response.statusCode() + " " + response.body());
+                return Optional.empty();
+            }
+            JsonNode root = objectMapper.readTree(response.body());
+            JsonNode text = root.get("text");
+            if (text != null && text.isTextual() && !text.asText().isBlank()) {
+                return Optional.of(text.asText());
+            }
+        } catch (Exception e) {
+            System.err.println("[LanxinApiClient] STT call failed: " + e.getMessage());
+        }
+        return Optional.empty();
+    }
+
+    // ── Text-to-Speech ──────────────────────────────────────────
+
+    /**
+     * Synthesize speech from text via OpenAI-compatible /audio/speech endpoint.
+     *
+     * @param text  text to speak (max ~4000 chars)
+     * @param voice voice id (alloy, echo, fable, onyx, nova, shimmer)
+     * @return raw MP3 audio bytes, or empty if the API is unavailable
+     */
+    public Optional<byte[]> textToSpeech(String text, String voice) {
+        if (!configured()) {
+            return Optional.empty();
+        }
+        String voiceId = (voice != null && !voice.isBlank()) ? voice : "alloy";
+
+        Map<String, Object> request = Map.of(
+                "model", "tts-1",
+                "input", text,
+                "voice", voiceId,
+                "response_format", "mp3"
+        );
+
+        try {
+            String json = objectMapper.writeValueAsString(request);
+            java.net.http.HttpRequest httpRequest = java.net.http.HttpRequest.newBuilder()
+                    .uri(URI.create(audioSpeechUrl()))
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
+                    .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                    .timeout(java.time.Duration.ofSeconds(120))
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(json))
+                    .build();
+
+            java.net.http.HttpResponse<byte[]> response = httpClient.send(httpRequest,
+                    java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+            if (response.statusCode() >= 400) {
+                System.err.println("[LanxinApiClient] TTS call failed: " + response.statusCode());
+                return Optional.empty();
+            }
+            byte[] audioData = response.body();
+            if (audioData != null && audioData.length > 0) {
+                return Optional.of(audioData);
+            }
+        } catch (Exception e) {
+            System.err.println("[LanxinApiClient] TTS call failed: " + e.getMessage());
+        }
+        return Optional.empty();
+    }
+
+    // ── Helper methods ──────────────────────────────────────────
+
+    private void writePart(java.io.ByteArrayOutputStream out, String boundary,
+                           String name, String value) throws java.io.IOException {
+        String part = "--" + boundary + "\r\n"
+                + "Content-Disposition: form-data; name=\"" + name + "\"\r\n\r\n"
+                + value + "\r\n";
+        out.write(part.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    private void writePart(java.io.ByteArrayOutputStream out, String boundary,
+                           String name, String filename, String mimeType,
+                           byte[] data) throws java.io.IOException {
+        String header = "--" + boundary + "\r\n"
+                + "Content-Disposition: form-data; name=\"" + name + "\"; filename=\"" + filename + "\"\r\n"
+                + "Content-Type: " + mimeType + "\r\n\r\n";
+        out.write(header.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        out.write(data);
+        out.write("\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    private String extensionForMime(String mimeType) {
+        if (mimeType == null) return "webm";
+        if (mimeType.contains("webm")) return "webm";
+        if (mimeType.contains("mp3") || mimeType.contains("mpeg")) return "mp3";
+        if (mimeType.contains("wav")) return "wav";
+        if (mimeType.contains("ogg")) return "ogg";
+        return "webm";
+    }
+
+    private String audioTranscriptionsUrl() {
+        String normalized = apiUrl.endsWith("/") ? apiUrl.substring(0, apiUrl.length() - 1) : apiUrl;
+        return normalized + "/audio/transcriptions?requestId=" + UUID.randomUUID();
+    }
+
+    private String audioSpeechUrl() {
+        String normalized = apiUrl.endsWith("/") ? apiUrl.substring(0, apiUrl.length() - 1) : apiUrl;
+        return normalized + "/audio/speech?requestId=" + UUID.randomUUID();
+    }
+
     public Optional<float[]> embedding(String input) {
         if (apiKey.isBlank() || apiUrl.isBlank() || embeddingModel.isBlank()) {
             return Optional.empty();
