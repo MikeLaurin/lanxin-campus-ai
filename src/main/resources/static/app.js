@@ -2414,6 +2414,12 @@ function bindEvents() {
     if (btn && !btn.classList.contains("ripple-none")) addRipple(e);
   });
 
+  // Theme toggle
+  const themeToggle = $("#themeToggle");
+  if (themeToggle) {
+    themeToggle.addEventListener("click", toggleTheme);
+  }
+
   // Auth
   $("#loginForm").addEventListener("submit", handleLogin);
   $("#registerForm").addEventListener("submit", handleRegister);
@@ -2732,6 +2738,48 @@ function bindEvents() {
   });
 }
 
+// ── Dark Mode ──────────────────────────────────────────
+
+function initTheme() {
+  const saved = localStorage.getItem("lanxin_theme");
+  if (saved === "dark") {
+    document.documentElement.setAttribute("data-theme", "dark");
+    updateThemeIcon(true);
+  } else if (saved === "light") {
+    document.documentElement.removeAttribute("data-theme");
+    updateThemeIcon(false);
+  } else {
+    // Auto-detect system preference
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    if (prefersDark) {
+      document.documentElement.setAttribute("data-theme", "dark");
+      updateThemeIcon(true);
+    } else {
+      updateThemeIcon(false);
+    }
+  }
+}
+
+function toggleTheme() {
+  const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+  if (isDark) {
+    document.documentElement.removeAttribute("data-theme");
+    localStorage.setItem("lanxin_theme", "light");
+    updateThemeIcon(false);
+  } else {
+    document.documentElement.setAttribute("data-theme", "dark");
+    localStorage.setItem("lanxin_theme", "dark");
+    updateThemeIcon(true);
+  }
+}
+
+function updateThemeIcon(isDark) {
+  const icon = document.getElementById("themeIcon");
+  if (icon) {
+    icon.textContent = isDark ? "☀️" : "🌙";
+  }
+}
+
 // ── Boot ──────────────────────────────────────────────
 
 async function bootApp() {
@@ -2739,6 +2787,7 @@ async function bootApp() {
 }
 
 async function boot() {
+  initTheme();
   bindEvents();
   initBubble();
 
